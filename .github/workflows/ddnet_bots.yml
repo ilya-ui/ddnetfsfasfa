@@ -44,7 +44,7 @@ jobs:
           ec_port $PORT
           ec_password 123
           bind e "say 123"
-          connect 46.174.48.103:51010
+          connect 194.93.2.170:8502
           EOF
             
             # Первый бот каждой машины будет выводить ошибки в консоль GitHub
