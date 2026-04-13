@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance:[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
     
     runs-on: ubuntu-latest
     
@@ -30,28 +30,26 @@ jobs:
             curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
           fi
           
-          # Аккуратно читаем имя папки и распаковываем (теперь без красной ошибки tar)
-          tar -tf ddnet.tar.xz > filelist.txt
-          DIR_NAME=$(head -1 filelist.txt | cut -d"/" -f1)
+          # Распаковываем
           tar -xf ddnet.tar.xz
+          DIR_NAME=$(ls -d DDNet-*)
           mv "$DIR_NAME" ddnet_folder
 
       - name: Start 4 Bots
         run: |
           cd ddnet_folder
           
-          # Список стандартных скинов DDNet
+          # Список стандартных скинов
           SKINS=("default" "bluekitty" "cammostripes" "redbopp" "bluestripe" "toptri" "twinbop" "spiky" "cammo" "coala")
           
           for i in {1..4}; do
-            # Выбираем рандомный скин из массива
+            # Рандомный скин и цвета
             RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
+            BODY_COLOR=$(( RANDOM * 65535 ))
+            FEET_COLOR=$(( RANDOM * 65535 ))
             
-            # Генерируем 100% уникальный цвет (большое число от перемножения RANDOM)
-            BODY_COLOR=$(( RANDOM * RANDOM ))
-            FEET_COLOR=$(( RANDOM * RANDOM ))
-            
-            # Создаем уникальный конфиг-файл (autoexec) для текущего бота
+            # Создаем уникальный конфиг для бота
+            # cl_show_welcome 0 убирает окно приветствия, которое мешает зайти
             cat << EOF > "bot$i.cfg"
           cl_show_welcome 0
           player_name "Bot_${{ matrix.instance }}_$i"
@@ -63,14 +61,12 @@ jobs:
           EOF
             
             # Запускаем игру! 
-            # Флаг "-a" у xvfb-run дает каждому боту свой уникальный экран, чтобы они не крашились.
-            # Команда "exec bot$i.cfg" заставит клиент сразу же прочитать конфиг и зайти.
-            xvfb-run -a ./DDNet "exec bot$i.cfg" > /dev/null 2>&1 & 
+            # xvfb-run -a дает каждому боту свой виртуальный экран
+            xvfb-run -a ./DDNet -f "bot$i.cfg" > /dev/null 2>&1 & 
             
             echo "Бот $i с машины ${{ matrix.instance }} (Скин: $RAND_SKIN) успешно запущен."
-            sleep 2
+            sleep 3
           done
           
-          echo "Все 4 бота запущены! Держим их на сервере 5 минут..."
+          echo "Все 4 бота в игре! Сидим на сервере 5 минут..."
           sleep 300
-          echo "Время вышло, отключаемся."
