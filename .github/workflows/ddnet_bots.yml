@@ -1,4 +1,4 @@
-name: DDNet Bot Army Headless (Final Fix)
+name: DDNet Bot Army Headless (Ultimate)
 
 on: 
   workflow_dispatch:
@@ -8,8 +8,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Можешь увеличить количество машин до 10, чтобы было 40 ботов
-        instance: [1, 2, 3, 4, 5] 
+        # 30 машин (Гитхаб запустит первые 20 сразу, остальные 10 — как освободятся места)
+        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
     
     runs-on: ubuntu-latest
     
@@ -31,69 +31,74 @@ jobs:
           const { Client } = require('teeworlds');
           const axios = require('axios');
 
+          // НОВЫЙ АЙПИ И ПОРТ
           const server = '88.198.96.203';
           const port = 8306;
 
-          async function createBot(name, delay) {
-            // Задержка перед созданием, чтобы сервер не забанил за частые входы
-            await new Promise(r => setTimeout(r, delay));
-
+          function createBot(name) {
             const client = new Client(server, port, name);
             let lastCmdId = 0;
 
             client.on('connected', () => {
-              console.log(`[${name}] Подключен. Вхожу в игру...`);
-              // Правильный метод в этой библиотеке - changeTeam
+              console.log(`[${name}] Подключен к ${server}:${port}`);
+              
+              // Пытаемся зайти в игру максимально быстро
               setTimeout(() => {
-                if (client.game) {
-                  client.game.changeTeam(0); 
-                  console.log(`[${name}] Заспавнился!`);
+                if (!client.game) return;
+                try {
+                  // Пробуем разные методы входа, чтобы не упасть с ошибкой
+                  if (client.game.changeTeam) client.game.changeTeam(0);
+                  else if (client.game.joinTeam) client.game.joinTeam(0);
+                  
+                  // Дополнительно отправляем команду в чат для гарантии входа
+                  client.game.say("/join");
+                } catch (e) {
+                  console.log(`[${name}] Ошибка при попытке входа в команду, но бот жив.`);
                 }
-              }, 3000);
+              }, 1000);
             });
 
             client.on('disconnect', (reason) => {
               console.log(`[${name}] Вылетел: ${reason}`);
             });
 
-            // Цикл опроса сайта
+            // Цикл опроса сайта на команды (1 раз в секунду)
             setInterval(async () => {
               try {
                 const res = await axios.get(process.env.CONTROL_URL);
                 if (res.data && res.data.id > lastCmdId) {
                   lastCmdId = res.data.id;
                   const { type, value } = res.data;
-                  console.log(`[${name}] Команда: ${type} -> ${value}`);
+                  if (!client.game) return;
 
                   if (type === 'chat') {
                     client.game.say(value);
                   } else if (type === 'key') {
                     if (value === 'space') {
                       client.game.input.jump = 1;
-                      setTimeout(() => { client.game.input.jump = 0; }, 300);
+                      setTimeout(() => { client.game.input.jump = 0; }, 200);
                     }
                     if (value === 'd') {
                       client.game.input.direction = 1;
-                      setTimeout(() => { client.game.input.direction = 0; }, 1000);
+                      setTimeout(() => { client.game.input.direction = 0; }, 800);
                     }
                     if (value === 'a') {
                       client.game.input.direction = -1;
-                      setTimeout(() => { client.game.input.direction = 0; }, 1000);
+                      setTimeout(() => { client.game.input.direction = 0; }, 800);
                     }
                   }
                 }
               } catch (e) {}
-            }, 1500);
+            }, 1000);
 
             client.connect();
           }
 
-          // Запускаем ровно 4 бота (лимит сервера на один IP)
-          // С разным временем задержки, чтобы не кикало за спам подключениями
-          createBot(`Bot_${process.env.INSTANCE}_1`, 1000);
-          createBot(`Bot_${process.env.INSTANCE}_2`, 5000);
-          createBot(`Bot_${process.env.INSTANCE}_3`, 10000);
-          createBot(`Bot_${process.env.INSTANCE}_4`, 15000);
+          // Запускаем по 4 бота на машину (лимит на один IP)
+          createBot(`Bot_${process.env.INSTANCE}_1`);
+          createBot(`Bot_${process.env.INSTANCE}_2`);
+          createBot(`Bot_${process.env.INSTANCE}_3`);
+          createBot(`Bot_${process.env.INSTANCE}_4`);
           EOF
           
           node bot.js
