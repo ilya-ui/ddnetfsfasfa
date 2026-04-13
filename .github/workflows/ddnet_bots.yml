@@ -1,73 +1,91 @@
-name: Proxy Farm (Save to Repo)
+name: DDNet Bot Army Official Control
 
 on: 
   workflow_dispatch:
 
-permissions:
-  contents: write # Даем право Гитхабу записывать файлы в репозиторий
-
 jobs:
-  proxy:
+  spawn-bots:
     strategy:
       fail-fast: false
       matrix:
+        # 30 машин по 4 бота = 120 ботов
         instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
     
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Нужно для корректного пуша
-
-      - name: Install Proxy Tools
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y microsocks curl
-          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-          sudo dpkg -i cloudflared.deb
-
-      - name: Start SOCKS5 & Tunnel
+          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3
+      
+      - name: Download DDNet Client
         run: |
-          microsocks -p 1080 &
-          nohup cloudflared tunnel --url tcp://127.0.0.1:1080 > tunnel.log 2>&1 &
-          
-          # Ждем получения ссылки
-          sleep 20
-          
-          TUNNEL_URL=$(grep -o 'https://[-a-z0-9.]*trycloudflare.com' tunnel.log | head -n 1 | sed 's/https:\/\///')
-          if [ -z "$TUNNEL_URL" ]; then exit 1; fi
-          
-          echo "PROXY_ADDR=${TUNNEL_URL}:443" >> $GITHUB_ENV
+          LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
+          curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
+          tar -xf ddnet.tar.xz
+          mv DDNet-* ddnet_folder
 
-      - name: Save Proxy to Repo
+      - name: Spawn & Control Army
+        env:
+          CONTROL_URL: "https://me5years.alwaysdata.net/index.php?action=get"
+          SERVER_ADDR: "213.152.43.100:7870"
         run: |
-          # Настройка Git (чтобы Гитхаб знал, кто автор коммита)
-          git config --global user.name "ProxyBot"
-          git config --global user.email "proxy-bot@github.com"
+          cd ddnet_folder
+          
+          # Запуск виртуального экрана
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 3
 
-          # Создаем папку, если её нет
-          mkdir -p active_proxies
-          
-          # Записываем прокси в файл
-          echo "SOCKS5 ${{ env.PROXY_ADDR }}" > active_proxies/node_${{ matrix.instance }}.txt
-          
-          # --- ЦИКЛ ОТПРАВКИ (чтобы избежать конфликтов) ---
-          # Пытаемся 10 раз. Если кто-то другой уже запушил, мы делаем pull --rebase и пробуем снова
-          for i in {1..10}; do
-            git add active_proxies/node_${{ matrix.instance }}.txt
-            git commit -m "Update Proxy Node ${{ matrix.instance }}" || exit 0
-            
-            # Тянем изменения от других машин и пытаемся отправить свои
-            if git pull --rebase origin main && git push origin main; then
-              echo "Proxy saved to repo!"
-              break
-            else
-              echo "Конфликт пуша, ждем и пробуем снова..."
-              sleep $((RANDOM % 20 + 5)) # Случайная пауза 5-25 сек
-            fi
+          # Запуск 4 ботов (лимит IP на многих серверах)
+          SKINS=("default" "bluekitty" "cammostripes" "redbopp" "bluestripe")
+          for i in {1..4}; do
+            RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
+            cat << EOF > "bot$i.cfg"
+          cl_show_welcome 0
+          cl_motd_time 0
+          cl_auto_join_team 1
+          player_name "Bot_${{ matrix.instance }}_$i"
+          player_skin "$RAND_SKIN"
+          EOF
+            # Запуск официального клиента в фоне
+            ./DDNet -f "bot$i.cfg" "connect $SERVER_ADDR" > /dev/null 2>&1 &
+            sleep 2
           done
 
-      - name: Keep Alive (6 Hours)
-        run: sleep 21600
+          echo "Армия заспавнена. Слушаю команды..."
+          
+          LAST_ID="0"
+          while true; do
+            # Получаем команду из Alwaysdata
+            CMD_JSON=$(curl -s "$CONTROL_URL" || echo '{"id":"0"}')
+            ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
+            
+            # Если ID команды изменился - выполняем
+            if [ "$ID" != "$LAST_ID" ] && [ "$ID" != "0" ]; then
+              LAST_ID=$ID
+              TYPE=$(echo "$CMD_JSON" | jq -r '.type')
+              VAL=$(echo "$CMD_JSON" | jq -r '.value')
+              
+              echo "Команда принята: $TYPE -> $VAL"
+              
+              # Ищем все окна DDNet
+              WIDS=$(xdotool search --class "DDNet")
+              
+              for WID in $WIDS; do
+                if [ "$TYPE" == "chat" ]; then
+                  # Чат через эмуляцию клавиш
+                  xdotool key --window $WID t
+                  sleep 0.1
+                  xdotool type --window $WID "$VAL"
+                  sleep 0.1
+                  xdotool key --window $WID Return
+                elif [ "$TYPE" == "key" ]; then
+                  # Любая клавиша (space, a, d, s)
+                  xdotool key --window $WID "$VAL"
+                fi
+              done
+            fi
+            sleep 2
+          done
