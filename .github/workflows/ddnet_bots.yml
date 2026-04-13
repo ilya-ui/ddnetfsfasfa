@@ -16,18 +16,23 @@ jobs:
       - name: Install All Dependencies
         run: |
           sudo apt-get update
-          # Ставим вообще всё, что может потребовать DDNet
-          sudo apt-get install -y xvfb libsdl2-2.0-0 libcurl4 libfreetype6 libgl1-mesa-glx libglu1-mesa libnotify4 libopus0 libopusfile0 libpng16-16 libsqlite3-0 libvorbis0a libvorbisenc2 libvorbisfile3 libx11-6 libxext6 libxrender1
+          # Пакеты для Ubuntu 24.04: libgl1 и libglx-mesa0 вместо старого mesa-glx
+          sudo apt-get install -y xvfb libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libopus0 libopusfile0 libpng16-16 libsqlite3-0 libvorbis0a libvorbisenc2 libvorbisfile3 libx11-6 libxext6 libxrender1
       
       - name: Download DDNet Client
         run: |
+          # Парсим прямую ссылку с сайта
           LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
-          curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
+          if [[ "$LINK" == http* ]]; then
+            curl -L -o ddnet.tar.xz "$LINK"
+          else
+            curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
+          fi
           tar -xf ddnet.tar.xz
           DIR_NAME=$(ls -d DDNet-*)
           mv "$DIR_NAME" ddnet_folder
 
-      - name: Start 4 Bots with Correct Libraries
+      - name: Start 4 Bots
         run: |
           cd ddnet_folder
           
@@ -38,7 +43,7 @@ jobs:
             BODY_COLOR=$(( RANDOM * 65535 ))
             FEET_COLOR=$(( RANDOM * 65535 ))
             
-            # Создаем конфиг
+            # Пишем конфиг
             cat << EOF > "bot$i.cfg"
           cl_show_welcome 0
           cl_motd_time 0
@@ -50,21 +55,20 @@ jobs:
           EOF
             
             echo "Запуск бота $i..."
-            # Запускаем через xvfb-run
+            # xvfb-run -a (авто-номер дисплея) критически важен для запуска пачки ботов
             xvfb-run -a -s "-screen 0 1024x768x24" ./DDNet -f "bot$i.cfg" "connect 46.174.48.103:51010" > "debug_bot_$i.log" 2>&1 &
             sleep 4
           done
 
-          echo "Проверка логов через 10 секунд..."
-          sleep 10
+          echo "Ожидание коннекта..."
+          sleep 15
           
-          if grep -q "connected" debug_bot_1.log; then
-             echo "✅ БОТ ЗАШЕЛ!"
-          elif grep -q "timeout" debug_bot_1.log; then
-             echo "❌ БАН ПО IP (Timeout)"
+          echo "--- ЛОГ ПЕРВОГО БОТА (ДЛЯ ПРОВЕРКИ) ---"
+          if [ -f debug_bot_1.log ]; then
+            tail -n 25 debug_bot_1.log
           else
-             echo "--- ПОСЛЕДНИЕ СТРОКИ ЛОГА ---"
-             tail -n 20 debug_bot_1.log
+            echo "Лог файл не создан!"
           fi
 
+          echo "Боты в работе 5 минут..."
           sleep 300
