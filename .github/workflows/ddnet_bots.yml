@@ -1,4 +1,4 @@
-name: DDNet Bot Army Headless (Ultimate)
+name: DDNet Bot Army Official Client (30 Instances)
 
 on: 
   workflow_dispatch:
@@ -14,106 +14,81 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18
+      - name: Install All Dependencies
+        run: |
+          sudo apt-get update
+          # Ставим зависимости для графики DDNet и инструменты управления
+          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3
+      
+      - name: Download DDNet Client
+        run: |
+          # Качаем последнюю версию для Linux
+          LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
+          curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
+          tar -xf ddnet.tar.xz
+          mv DDNet-* ddnet_folder
 
-      - name: Install Libs
-        run: npm install teeworlds axios
-
-      - name: Run Army
+      - name: Spawn & Control Army
         env:
           CONTROL_URL: "https://me5years.alwaysdata.net/index.php?action=get"
-          INSTANCE: ${{ matrix.instance }}
+          SERVER_ADDR: "5.189.17.23:2126"
         run: |
-          cat << 'EOF' > bot.js
-          const { Client } = require('teeworlds');
-          const axios = require('axios');
-
-          // НОВЫЙ АЙПИ
-          const server = '45.141.57.35';
-          const port = 8307;
-
-          function createBot(name) {
-            const client = new Client(server, port, name);
-            let lastCmdId = 0;
-            let ready = false;
-
-            client.on('connected', () => {
-              console.log(`[${name}] Подключен к ${server}. Жду загрузку карты...`);
-            });
-
-            client.on('mapDetails', () => {
-              console.log(`[${name}] Карта получена. Пробую войти...`);
-              ready = true;
-              
-              // Пытаемся зайти трижды с паузой, чтобы наверняка
-              [1000, 3000, 6000].forEach(delay => {
-                setTimeout(() => {
-                  if (client.game) {
-                    try {
-                      client.game.changeTeam(0);
-                      client.game.say("/join");
-                    } catch(e) {}
-                  }
-                }, delay);
-              });
-            });
-
-            client.on('disconnect', (reason) => {
-              console.log(`[${name}] Вылетел: ${reason}`);
-              ready = false;
-            });
-
-            // Опрос сайта Alwaysdata
-            setInterval(async () => {
-              // Если бот еще не загрузил карту, не стучимся на сайт зря
-              if (!ready || !client.game) return;
-
-              try {
-                const res = await axios.get(process.env.CONTROL_URL);
-                const data = res.data;
-
-                if (data && data.id > lastCmdId) {
-                  lastCmdId = data.id;
-                  console.log(`[${name}] Команда: ${data.type} -> ${data.value}`);
-
-                  if (data.type === 'chat') {
-                    client.game.say(data.value);
-                  } else if (data.type === 'key') {
-                    if (data.value === 'space') {
-                      client.game.input.jump = 1;
-                      setTimeout(() => { if(client.game) client.game.input.jump = 0; }, 250);
-                    }
-                    if (data.value === 'd') {
-                      client.game.input.direction = 1;
-                      setTimeout(() => { if(client.game) client.game.input.direction = 0; }, 1000);
-                    }
-                    if (data.value === 'a') {
-                      client.game.input.direction = -1;
-                      setTimeout(() => { if(client.game) client.game.input.direction = 0; }, 1000);
-                    }
-                    if (data.value === 's' || data.value === 'down') {
-                        // Присесть или вниз
-                        client.game.input.targetY = 100;
-                        setTimeout(() => { if(client.game) client.game.input.targetY = 0; }, 500);
-                    }
-                  }
-                }
-              } catch (e) {
-                // Ошибка связи с сайтом (Alwaysdata нагружен)
-              }
-            }, 2000);
-
-            client.connect();
-          }
-
-          // По 4 бота на машину
-          createBot(`Bot_${process.env.INSTANCE}_1`);
-          createBot(`Bot_${process.env.INSTANCE}_2`);
-          createBot(`Bot_${process.env.INSTANCE}_3`);
-          createBot(`Bot_${process.env.INSTANCE}_4`);
-          EOF
+          cd ddnet_folder
           
-          node bot.js
+          # Запускаем виртуальный монитор
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 3
+
+          # Запускаем 4 ботов через официальный клиент
+          SKINS=("default" "bluekitty" "redbopp" "bluestripe")
+          for i in {1..4}; do
+            RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
+            cat << EOF > "bot$i.cfg"
+          cl_show_welcome 0
+          cl_motd_time 0
+          cl_auto_join_team 1
+          player_name "Bot_${{ matrix.instance }}_$i"
+          player_skin "$RAND_SKIN"
+          EOF
+            # Запуск клиента. Перенаправляем вывод в никуда, чтобы не спамить в логах
+            ./DDNet -f "bot$i.cfg" "connect $SERVER_ADDR" > /dev/null 2>&1 &
+            echo "Бот $i запущен на ${{ matrix.instance }} машине."
+            sleep 2
+          done
+
+          echo "Все боты запущены. Ожидание команд с Alwaysdata..."
+          
+          LAST_ID="0"
+          # Бесконечный цикл управления
+          while true; do
+            # Запрос команды с сайта
+            CMD_JSON=$(curl -s "$CONTROL_URL" || echo '{"id":"0"}')
+            ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
+            
+            if [ "$ID" != "$LAST_ID" ] && [ "$ID" != "0" ]; then
+              LAST_ID=$ID
+              TYPE=$(echo "$CMD_JSON" | jq -r '.type')
+              VAL=$(echo "$CMD_JSON" | jq -r '.value')
+              
+              echo "Выполняю команду: $TYPE -> $VAL"
+              
+              # Ищем ID всех окон DDNet
+              WIDS=$(xdotool search --class "DDNet")
+              
+              for WID in $WIDS; do
+                if [ "$TYPE" == "chat" ]; then
+                  # Эмуляция ввода в чат: жмем T, пишем, жмем Enter
+                  xdotool key --window $WID t
+                  sleep 0.1
+                  xdotool type --window $WID "$VAL"
+                  sleep 0.1
+                  xdotool key --window $WID Return
+                elif [ "$TYPE" == "key" ]; then
+                  # Нажатие любой клавиши (space, a, d, и т.д.)
+                  xdotool key --window $WID "$VAL"
+                fi
+              done
+            fi
+            sleep 2 # Пауза опроса сайта
+          done
