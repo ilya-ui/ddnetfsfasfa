@@ -16,7 +16,8 @@ jobs:
       - name: Install All Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libopus0 libopusfile0 libpng16-16 libsqlite3-0 libvorbis0a libvorbisenc2 libvorbisfile3 libx11-6 libxext6 libxrender1 netcat-openbsd
+          # Добавили xdotool для симуляции нажатия клавиш
+          sudo apt-get install -y xvfb xdotool libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa netcat-openbsd
       
       - name: Download DDNet Client
         run: |
@@ -25,51 +26,62 @@ jobs:
           tar -xf ddnet.tar.xz
           mv DDNet-* ddnet_folder
 
-      - name: Start 4 Bots with Remote Control
+      - name: Start 4 Bots with Bind System
         run: |
           cd ddnet_folder
           
-          SKINS=("default" "bluekitty" "cammostripes" "redbopp" "bluestripe" "toptri" "twinbop" "spiky" "cammo" "coala")
-          
+          # Запускаем 4 X-сервера и 4 бота вручную для контроля клавиш
           for i in {1..4}; do
+            DISPLAY_NUM=$((10 + i))
             PORT=$((8000 + i))
-            RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
             
-            # Конфиг: включаем ec_port для управления
+            # 1. Создаем виртуальный экран
+            Xvfb :$DISPLAY_NUM -screen 0 1024x768x24 &
+            sleep 2
+            
+            # 2. Создаем конфиг (авто-вход в команду и бинд)
             cat << EOF > "bot$i.cfg"
           cl_show_welcome 0
           cl_motd_time 0
+          cl_auto_join_team 1
           player_name "Bot_${{ matrix.instance }}_$i"
-          player_skin "$RAND_SKIN"
           ec_port $PORT
           ec_password 123
+          bind e "say 123"
           EOF
             
-            # Запуск бота
-            xvfb-run -a -s "-screen 0 1024x768x24" ./DDNet -f "bot$i.cfg" "connect 45.141.57.154:8303" > /dev/null 2>&1 &
-            echo "Бот $i запущен (Экран: $PORT)"
+            # 3. Запускаем бота на конкретном экране
+            DISPLAY=:$DISPLAY_NUM ./DDNet -f "bot$i.cfg" "connect 46.174.48.103:51010" > /dev/null 2>&1 &
+            echo "Бот $i запущен на :$DISPLAY_NUM (Порт: $PORT)"
           done
 
-          echo "Подключение к твоему Gist для управления..."
+          echo "Контроллер Gist запущен..."
           
           LAST_CMD=""
-          # Твой Raw Gist
           CMD_URL="https://gist.githubusercontent.com/ilya-ui/1d7f6c3b1a984e779265070395c0c2d4/raw/"
 
-          # Цикл работает ~15 минут
-          for tick in {1..300}; do
-            # Качаем команду (добавляем рандомный параметр от кэша)
+          for tick in {1..200}; do
             CURRENT_CMD=$(curl -s "${CMD_URL}?v=$(date +%s)")
             
-            # Если в Gist что-то написано и это не старая команда
             if [ -n "$CURRENT_CMD" ] && [ "$CURRENT_CMD" != "$LAST_CMD" ]; then
-              echo "Исполняю команду: $CURRENT_CMD"
-              for PORT in {8001..8004}; do
-                # Отправка в консоль бота: ПАРОЛЬ КОМАНДА
-                echo "123 $CURRENT_CMD" | nc -w 1 localhost $PORT || true
+              echo "Новый приказ: $CURRENT_CMD"
+              
+              for i in {1..4}; do
+                PORT=$((8000 + i))
+                DISPLAY_NUM=$((10 + i))
+                
+                # Если команда - это say, то мы обновляем бинд и жмем E
+                if [[ "$CURRENT_CMD" == say* ]]; then
+                  echo "123 bind e \"$CURRENT_CMD\"" | nc -w 1 localhost $PORT || true
+                  sleep 0.5
+                  # Жмем клавишу E на виртуальном экране бота
+                  DISPLAY=:$DISPLAY_NUM xdotool key e
+                else
+                  # Любая другая команда (vote, emote) - просто в консоль
+                  echo "123 $CURRENT_CMD" | nc -w 1 localhost $PORT || true
+                fi
               done
               LAST_CMD="$CURRENT_CMD"
             fi
-            
-            sleep 3 # Проверка каждые 3 секунды
+            sleep 4
           done
