@@ -1,4 +1,4 @@
-name: DDNet Bot Army
+name: DDNet Bot Army Debug
 
 on: 
   workflow_dispatch:
@@ -16,57 +16,69 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libglu1-mesa libwebpmux3 libarchive13
+          sudo apt-get install -y xvfb libglu1-mesa libwebpmux3 libarchive13 libpng16-16 libgl1-mesa-dri mesa-utils netcat-openbsd
       
       - name: Download DDNet Client
         run: |
-          # Находим ссылку на последнюю версию
           LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
-          echo "Качаем: $LINK"
-          
-          if [[ "$LINK" == http* ]]; then
-            curl -L -o ddnet.tar.xz "$LINK"
-          else
-            curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
-          fi
-          
-          # Распаковываем
+          curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
           tar -xf ddnet.tar.xz
           DIR_NAME=$(ls -d DDNet-*)
           mv "$DIR_NAME" ddnet_folder
 
-      - name: Start 4 Bots
+      - name: Check Server Reachability
+        run: |
+          echo "Проверяем, видит ли GitHub сервер 46.174.48.103..."
+          # Пытаемся стукнуться в UDP порт (может не показать точно, но проверим маршрут)
+          nc -u -z -v 46.174.48.103 51010 || echo "Сервер не отвечает на UDP запросы (но это бывает)"
+
+      - name: Start 4 Bots with Error Tracking
         run: |
           cd ddnet_folder
           
-          # Список стандартных скинов
+          # Список скинов
           SKINS=("default" "bluekitty" "cammostripes" "redbopp" "bluestripe" "toptri" "twinbop" "spiky" "cammo" "coala")
           
           for i in {1..4}; do
-            # Рандомный скин и цвета
             RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
             BODY_COLOR=$(( RANDOM * 65535 ))
             FEET_COLOR=$(( RANDOM * 65535 ))
             
-            # Создаем уникальный конфиг для бота
-            # cl_show_welcome 0 убирает окно приветствия, которое мешает зайти
+            # Конфиг с жестким отключением всего лишнего
             cat << EOF > "bot$i.cfg"
           cl_show_welcome 0
+          cl_motd_time 0
+          cl_print_log_links 0
           player_name "Bot_${{ matrix.instance }}_$i"
           player_skin "$RAND_SKIN"
           player_use_custom_color 1
           player_color_body $BODY_COLOR
           player_color_feet $FEET_COLOR
-          connect 46.174.48.103:51010
           EOF
             
-            # Запускаем игру! 
-            # xvfb-run -a дает каждому боту свой виртуальный экран
-            xvfb-run -a ./DDNet -f "bot$i.cfg" > /dev/null 2>&1 & 
+            echo "--- Запуск бота $i (Машина ${{ matrix.instance }}) ---"
             
-            echo "Бот $i с машины ${{ matrix.instance }} (Скин: $RAND_SKIN) успешно запущен."
-            sleep 3
+            # Запускаем и пишем лог в файл
+            xvfb-run -a -s "-screen 0 1024x768x24" ./DDNet -f "bot$i.cfg" "connect 46.174.48.103:51010" > "debug_bot_$i.log" 2>&1 &
+            sleep 4
           done
+
+          echo "Проверяем результат работы первого бота..."
+          sleep 10
           
-          echo "Все 4 бота в игре! Сидим на сервере 5 минут..."
+          # Читаем лог и ищем ключевые слова
+          LOG_CONTENT=$(cat debug_bot_1.log)
+          
+          if echo "$LOG_CONTENT" | grep -q "connected"; then
+             echo "✅ УСПЕХ: Бот сообщил, что зашел на сервер!"
+          elif echo "$LOG_CONTENT" | grep -q "timeout"; then
+             echo "❌ ОШИБКА: ТАЙМАУТ (Сервер игнорирует GitHub или IP забанен)"
+          elif echo "$LOG_CONTENT" | grep -q "disconnected"; then
+             echo "❌ ОШИБКА: Сервер КИКНУЛ бота сразу после входа"
+          else
+             echo "⚠️ СТАТУС НЕИЗВЕСТЕН. Последние строки лога:"
+             tail -n 15 debug_bot_1.log
+          fi
+
+          echo "Все боты запущены. Оставляем их на 5 минут. Если в логе выше 'timeout' - на сервере их не будет."
           sleep 300
