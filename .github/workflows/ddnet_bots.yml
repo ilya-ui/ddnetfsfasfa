@@ -1,14 +1,13 @@
 name: DDNet Bot Army
 
 on: 
-  workflow_dispatch: # Запуск вручную кнопкой в GitHub Actions
+  workflow_dispatch:
 
 jobs:
   spawn-bots:
     strategy:
       fail-fast: false
       matrix:
-        # Список машин от 1 до 30 (одновременно запустятся только 20)
         instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
     
     runs-on: ubuntu-latest
@@ -21,29 +20,24 @@ jobs:
       
       - name: Download DDNet Client
         run: |
-          # Скачиваем актуальную версию клиента для Linux
-          curl -L https://ddnet.org/downloads/DDNet-18.4-linux-x86_64.tar.xz -o ddnet.tar.xz
+          curl -L https://github.com/ddnet/ddnet/releases/download/18.8/DDNet-18.8-linux_x86_64.tar.xz -o ddnet.tar.xz
           tar -xf ddnet.tar.xz
-          mv DDNet-18.4-linux-x86_64 ddnet_folder
+          mv DDNet-18.8-linux_x86_64 ddnet_folder
 
       - name: Start 4 Bots
         run: |
-          # Переходим в папку с клиентом
           cd ddnet_folder
           
-          # Запускаем 4 бота в фоне
           for i in {1..4}; do
-            # xvfb-run создает виртуальный экран для игры
-            # В кавычках "connect ..." передаем команды консоли игры
             xvfb-run ./DDNet \
               "connect 46.174.48.103:51010; player_name 'Bot_${{ matrix.instance }}_$i'" \
               > /dev/null 2>&1 & 
             
             echo "Бот $i с машины ${{ matrix.instance }} запущен."
-            sleep 2 # Небольшая пауза, чтобы сервер не офигел от одновременных входов
+            sleep 2
           done
           
           echo "Все 4 бота запущены. Ждем 5 минут..."
-          sleep 300 # Время, сколько боты будут находиться на сервере (в секундах)
+          sleep 300
           
           echo "Время вышло, отключаемся."
