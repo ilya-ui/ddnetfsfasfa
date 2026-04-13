@@ -1,10 +1,13 @@
-name: GitHub Proxy Farm (Final Fix)
+name: Proxy Farm (Save to Repo)
 
 on: 
   workflow_dispatch:
 
+permissions:
+  contents: write # Даем право Гитхабу записывать файлы в репозиторий
+
 jobs:
-  proxy-node:
+  proxy:
     strategy:
       fail-fast: false
       matrix:
@@ -13,48 +16,58 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Install Tools
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Нужно для корректного пуша
+
+      - name: Install Proxy Tools
         run: |
           sudo apt-get update
           sudo apt-get install -y microsocks curl
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared.deb
 
-      - name: Start Proxy & Tunnel
-        id: tunnel
+      - name: Start SOCKS5 & Tunnel
         run: |
           microsocks -p 1080 &
           nohup cloudflared tunnel --url tcp://127.0.0.1:1080 > tunnel.log 2>&1 &
           
+          # Ждем получения ссылки
           sleep 20
           
           TUNNEL_URL=$(grep -o 'https://[-a-z0-9.]*trycloudflare.com' tunnel.log | head -n 1 | sed 's/https:\/\///')
-          
-          if [ -z "$TUNNEL_URL" ]; then
-            echo "URL туннеля не найден."
-            exit 1
-          fi
+          if [ -z "$TUNNEL_URL" ]; then exit 1; fi
           
           echo "PROXY_ADDR=${TUNNEL_URL}:443" >> $GITHUB_ENV
 
-      - name: Update Gist
-        env:
-          # Теперь берем токен из секретов репозитория
-          GH_TOKEN: ${{ secrets.MY_GIST_TOKEN }}
-          GIST_ID: "1d7f6c3b1a984e779265070395c0c2d4"
+      - name: Save Proxy to Repo
         run: |
-          FILENAME="proxy_${{ matrix.instance }}.txt"
-          echo "SOCKS5 ${{ env.PROXY_ADDR }}" > $FILENAME
-          
-          # Рандомная пауза до 40 секунд, чтобы 30 машин не создали очередь
-          SLEEP_TIME=$((RANDOM % 40))
-          echo "Ожидание $SLEEP_TIME сек..."
-          sleep $SLEEP_TIME
-          
-          # Обновляем Gist через официальную команду
-          gh gist edit "$GIST_ID" --add-file "$FILENAME"
-          
-          echo "Файл $FILENAME успешно добавлен в Gist"
+          # Настройка Git (чтобы Гитхаб знал, кто автор коммита)
+          git config --global user.name "ProxyBot"
+          git config --global user.email "proxy-bot@github.com"
 
-      - name: Keep Alive
+          # Создаем папку, если её нет
+          mkdir -p active_proxies
+          
+          # Записываем прокси в файл
+          echo "SOCKS5 ${{ env.PROXY_ADDR }}" > active_proxies/node_${{ matrix.instance }}.txt
+          
+          # --- ЦИКЛ ОТПРАВКИ (чтобы избежать конфликтов) ---
+          # Пытаемся 10 раз. Если кто-то другой уже запушил, мы делаем pull --rebase и пробуем снова
+          for i in {1..10}; do
+            git add active_proxies/node_${{ matrix.instance }}.txt
+            git commit -m "Update Proxy Node ${{ matrix.instance }}" || exit 0
+            
+            # Тянем изменения от других машин и пытаемся отправить свои
+            if git pull --rebase origin main && git push origin main; then
+              echo "Proxy saved to repo!"
+              break
+            else
+              echo "Конфликт пуша, ждем и пробуем снова..."
+              sleep $((RANDOM % 20 + 5)) # Случайная пауза 5-25 сек
+            fi
+          done
+
+      - name: Keep Alive (6 Hours)
         run: sleep 21600
