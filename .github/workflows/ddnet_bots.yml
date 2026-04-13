@@ -1,4 +1,4 @@
-name: DDNet Bot Army Headless
+name: DDNet Bot Army Headless (Final Fix)
 
 on: 
   workflow_dispatch:
@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance: [1, 2, 3, 4, 5] # 5 машин
+        instance: [1, 2, 3, 4, 5]
     
     runs-on: ubuntu-latest
     
@@ -30,32 +30,46 @@ jobs:
           const { Client } = require('teeworlds');
           const axios = require('axios');
 
-          const server = '130.61.121.181';
-          const port = 8303;
+          const server = '88.198.96.203';
+          const port = 8306;
 
           async function createBot(name) {
             const client = new Client(server, port, name);
             let lastCmdId = 0;
+            let isInGame = false;
 
             client.on('connected', () => {
-              console.log(`[${name}] В игре!`);
+              console.log(`[${name}] Соединение установлено. Пытаюсь войти в игру...`);
+              // Заходим в синюю/красную команду (0 - обычный вход)
+              setTimeout(() => {
+                client.game.joinTeam(0); 
+                isInGame = true;
+                console.log(`[${name}] Команда на вход отправлена!`);
+              }, 2000);
             });
 
-            // Опрос сайта на команды
+            client.on('disconnect', (reason) => {
+              console.log(`[${name}] Вылетел: ${reason}`);
+              isInGame = false;
+            });
+
             setInterval(async () => {
               try {
                 const res = await axios.get(process.env.CONTROL_URL);
                 if (res.data && res.data.id > lastCmdId) {
                   lastCmdId = res.data.id;
                   const { type, value } = res.data;
-                  console.log(`[${name}] Команда: ${type} -> ${value}`);
+                  
+                  // Если бот еще не в игре, он может только копить команды, 
+                  // но мы попробуем выполнить
+                  console.log(`[${name}] Исполняю: ${type} -> ${value}`);
 
                   if (type === 'chat') {
                     client.game.say(value);
                   } else if (type === 'key') {
                     if (value === 'space') {
                       client.game.input.jump = 1;
-                      setTimeout(() => { client.game.input.jump = 0; }, 200);
+                      setTimeout(() => { client.game.input.jump = 0; }, 300);
                     }
                     if (value === 'd') {
                       client.game.input.direction = 1;
@@ -68,12 +82,11 @@ jobs:
                   }
                 }
               } catch (e) {}
-            }, 1000); // Проверка каждую секунду
+            }, 1000);
 
             client.connect();
           }
 
-          // Запускаем по 6 ботов на машину
           for (let i = 1; i <= 6; i++) {
             createBot(`Bot_${process.env.INSTANCE}_${i}`);
           }
