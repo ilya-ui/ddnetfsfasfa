@@ -1,94 +1,98 @@
-name: DDNet Bot Army Official Client (30 Instances)
+name: DDNet Army + Gist Proxy Control
 
 on: 
   workflow_dispatch:
 
 jobs:
-  spawn-bots:
+  army-and-proxy:
     strategy:
       fail-fast: false
       matrix:
-        # 30 машин = 120 ботов
         instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
     
     runs-on: ubuntu-latest
     
     steps:
-      - name: Install All Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          # Ставим зависимости для графики DDNet и инструменты управления
-          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3
-      
-      - name: Download DDNet Client
+          sudo apt-get install -y xvfb xdotool jq microsocks curl
+          # Установка Cloudflared
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+
+      - name: Start Proxy Tunnel & Update Gist
+        env:
+          # Твой токен и ID гиста
+          GH_TOKEN: "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"
+          GIST_ID: "1d7f6c3b1a984e779265070395c0c2d4"
         run: |
-          # Качаем последнюю версию для Linux
+          # 1. Запуск прокси
+          microsocks -p 1080 &
+          
+          # 2. Запуск туннеля (ждем появления URL)
+          nohup cloudflared tunnel --url tcp://127.0.0.1:1080 > tunnel.log 2>&1 &
+          sleep 12
+          
+          # 3. Вытаскиваем адрес туннеля
+          TUNNEL_URL=$(grep -o 'https://[-a-z0-9.]*trycloudflare.com' tunnel.log | head -n 1 | sed 's/https:\/\///')
+          PROXY_ADDR="${TUNNEL_URL}:443"
+          echo "Instance ${{ matrix.instance }} Proxy: $PROXY_ADDR"
+          
+          # 4. Записываем прокси в Gist (каждая машина в свой файл, чтобы не было конфликтов)
+          echo "$GH_TOKEN" | gh auth login --with-token
+          gh gist edit $GIST_ID --add-file "proxy_${{ matrix.instance }}.txt" - <<< "$PROXY_ADDR"
+
+      - name: Download & Run DDNet
+        run: |
           LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
           curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
           tar -xf ddnet.tar.xz
           mv DDNet-* ddnet_folder
 
-      - name: Spawn & Control Army
+      - name: Control Loop (Gist Listening)
         env:
-          CONTROL_URL: "https://me5years.alwaysdata.net/index.php?action=get"
-          SERVER_ADDR: "213.171.25.11:8307"
+          # Используем "вечно свежую" ссылку без хэша коммита
+          GIST_RAW_URL: "https://gist.githubusercontent.com/ilya-ui/1d7f6c3b1a984e779265070395c0c2d4/raw/gistfile1.txt"
         run: |
           cd ddnet_folder
-          
-          # Запускаем виртуальный монитор
           export DISPLAY=:99
           Xvfb :99 -screen 0 1024x768x24 &
           sleep 3
-
-          # Запускаем 4 ботов через официальный клиент
-          SKINS=("default" "bluekitty" "redbopp" "bluestripe")
+          
+          # Запуск 4 ботов
           for i in {1..4}; do
-            RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
-            cat << EOF > "bot$i.cfg"
-          cl_show_welcome 0
-          cl_motd_time 0
-          cl_auto_join_team 1
-          player_name "Bot_${{ matrix.instance }}_$i"
-          player_skin "$RAND_SKIN"
-          EOF
-            # Запуск клиента. Перенаправляем вывод в никуда, чтобы не спамить в логах
-            ./DDNet -f "bot$i.cfg" "connect $SERVER_ADDR" > /dev/null 2>&1 &
-            echo "Бот $i запущен на ${{ matrix.instance }} машине."
+            ./DDNet "connect 5.189.17.23:2126" > /dev/null 2>&1 &
             sleep 2
           done
 
-          echo "Все боты запущены. Ожидание команд с Alwaysdata..."
-          
-          LAST_ID="0"
-          # Бесконечный цикл управления
+          LAST_CMD=""
+          echo "Боты в игре. Слушаю Gist..."
+
           while true; do
-            # Запрос команды с сайта
-            CMD_JSON=$(curl -s "$CONTROL_URL" || echo '{"id":"0"}')
-            ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
+            # Качаем текущую команду
+            # Добавляем случайное число в конце, чтобы Гитхаб не отдавал старую версию из кэша
+            CURRENT_CMD=$(curl -s -L "${GIST_RAW_URL}?nocache=$RANDOM")
             
-            if [ "$ID" != "$LAST_ID" ] && [ "$ID" != "0" ]; then
-              LAST_ID=$ID
-              TYPE=$(echo "$CMD_JSON" | jq -r '.type')
-              VAL=$(echo "$CMD_JSON" | jq -r '.value')
+            if [ "$CURRENT_CMD" != "$LAST_CMD" ] && [ -n "$CURRENT_CMD" ]; then
+              LAST_CMD="$CURRENT_CMD"
+              echo "Новая команда: $CURRENT_CMD"
               
-              echo "Выполняю команду: $TYPE -> $VAL"
+              TYPE=$(echo $CURRENT_CMD | cut -d' ' -f1)
+              VALUE=$(echo $CURRENT_CMD | cut -d' ' -f2-)
               
-              # Ищем ID всех окон DDNet
               WIDS=$(xdotool search --class "DDNet")
-              
               for WID in $WIDS; do
-                if [ "$TYPE" == "chat" ]; then
-                  # Эмуляция ввода в чат: жмем T, пишем, жмем Enter
+                if [ "$TYPE" == "say" ]; then
                   xdotool key --window $WID t
-                  sleep 0.1
-                  xdotool type --window $WID "$VAL"
-                  sleep 0.1
+                  sleep 0.2
+                  xdotool type --window $WID "$VALUE"
+                  sleep 0.2
                   xdotool key --window $WID Return
                 elif [ "$TYPE" == "key" ]; then
-                  # Нажатие любой клавиши (space, a, d, и т.д.)
-                  xdotool key --window $WID "$VAL"
+                  xdotool key --window $WID "$VALUE"
                 fi
               done
             fi
-            sleep 2 # Пауза опроса сайта
+            sleep 5
           done
