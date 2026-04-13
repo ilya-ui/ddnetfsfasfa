@@ -48,7 +48,7 @@ jobs:
             
             # Запускаем бота. xvfb-run -a сам выберет свободный экран.
             # Команда connect идет аргументом - она самая приоритетная.
-            xvfb-run -a ./DDNet -f "bot$i.cfg" "connect 46.174.48.103:51010" > /dev/null 2>&1 &
+            xvfb-run -a ./DDNet -f "bot$i.cfg" "connect 45.141.57.35:8304" > /dev/null 2>&1 &
             
             echo "Бот $i (Машина ${{ matrix.instance }}) запущен."
             sleep 2
