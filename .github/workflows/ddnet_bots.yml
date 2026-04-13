@@ -31,8 +31,8 @@ jobs:
           const { Client } = require('teeworlds');
           const axios = require('axios');
 
-          const server = '78.47.95.60';
-          const port = 8304;
+          const server = '88.198.96.203';
+          const port = 8306;
 
           async function createBot(name, delay) {
             // Задержка перед созданием, чтобы сервер не забанил за частые входы
