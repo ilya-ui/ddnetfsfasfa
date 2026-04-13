@@ -1,4 +1,4 @@
-name: DDNet Bot Army Headless (Fast)
+name: DDNet Bot Army Headless (Fixed)
 
 on: 
   workflow_dispatch:
@@ -8,37 +8,46 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance: [1, 2, 3, 4, 5] # 5 машин
+        instance: [1, 2, 3, 4, 5]
     
     runs-on: ubuntu-latest
     
     steps:
-      - name: Install Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: 18
+          node-version: 18 # Используем стабильную 18-ю версию
 
       - name: Install Dependencies
-        run: npm install teeworlds-bot-api axios
+        # Пакет называется teeworlds, а не teeworlds-bot-api
+        run: npm install teeworlds axios
 
-      - name: Start Bots
+      - name: Run Bots Script
         env:
           CONTROL_URL: "https://me5years.alwaysdata.net/index.php?action=get"
           INSTANCE: ${{ matrix.instance }}
         run: |
           cat << 'EOF' > bot.js
-          const { TeeworldsBot } = require('teeworlds-bot-api');
+          const { Client } = require('teeworlds');
           const axios = require('axios');
 
           const server = '167.99.136.66';
           const port = 8303;
 
           async function createBot(name) {
-              const bot = new TeeworldsBot(server, port, name);
+              const client = new Client(server, port, name);
               
               let lastId = 0;
 
-              // Каждые 1.5 секунды проверяем сайт на наличие команд
+              client.on('connected', () => {
+                  console.log(`[${name}] Подключен к серверу!`);
+              });
+
+              client.on('disconnect', (reason) => {
+                  console.log(`[${name}] Отключен: ${reason}`);
+              });
+
+              // Цикл опроса сайта на наличие команд
               setInterval(async () => {
                   try {
                       const res = await axios.get(process.env.CONTROL_URL);
@@ -46,23 +55,35 @@ jobs:
 
                       if (data && data.id > lastId) {
                           lastId = data.id;
-                          console.log(`[${name}] Команда: ${data.type} - ${data.value}`);
+                          console.log(`[${name}] Новая команда: ${data.type}`);
 
                           if (data.type === 'chat') {
-                              bot.say(data.value);
+                              client.game.say(data.value);
                           } else if (data.type === 'key') {
-                              if (data.value === 'space') bot.jump();
-                              if (data.value === 'd') { bot.moveRight(); setTimeout(() => bot.stopMoving(), 500); }
-                              if (data.value === 'a') { bot.moveLeft(); setTimeout(() => bot.stopMoving(), 500); }
+                              // Управление в библиотеке teeworlds
+                              if (data.value === 'space') {
+                                  client.game.input.jump = 1;
+                                  setTimeout(() => client.game.input.jump = 0, 200);
+                              }
+                              if (data.value === 'd') {
+                                  client.game.input.direction = 1;
+                                  setTimeout(() => client.game.input.direction = 0, 1000);
+                              }
+                              if (data.value === 'a') {
+                                  client.game.input.direction = -1;
+                                  setTimeout(() => client.game.input.direction = 0, 1000);
+                              }
                           }
                       }
-                  } catch (e) {}
+                  } catch (e) {
+                      // Игнорируем ошибки сети
+                  }
               }, 1500);
 
-              bot.connect();
+              client.connect();
           }
 
-          // Запускаем 6 ботов на одну машину (всего будет 30 ботов)
+          // Запускаем по 6 ботов на машину
           for(let i=1; i<=6; i++) {
               createBot(`Bot_${process.env.INSTANCE}_${i}`);
           }
