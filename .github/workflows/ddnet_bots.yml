@@ -1,4 +1,4 @@
-name: DDNet Bot Army Control
+name: DDNet Bot Army Headless (Fast)
 
 on: 
   workflow_dispatch:
@@ -8,73 +8,64 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance: [1, 2, 3, 4, 5] # Количество виртуальных машин
+        instance: [1, 2, 3, 4, 5] # 5 машин
     
     runs-on: ubuntu-latest
     
     steps:
-      - name: Install Tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3
-      
-      - name: Download DDNet
-        run: |
-          LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
-          curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
-          tar -xf ddnet.tar.xz
-          mv DDNet-* ddnet_folder
+      - name: Install Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
 
-      - name: Bots Loop
+      - name: Install Dependencies
+        run: npm install teeworlds-bot-api axios
+
+      - name: Start Bots
+        env:
+          CONTROL_URL: "https://me5years.alwaysdata.net/index.php?action=get"
+          INSTANCE: ${{ matrix.instance }}
         run: |
-          cd ddnet_folder
-          export DISPLAY=:99
-          Xvfb :99 -screen 0 1024x768x24 &
-          sleep 3
-          
-          # Запуск 4 ботов
-          SKINS=("default" "bluekitty" "cammostripes" "redbopp")
-          for i in {1..4}; do
-            RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
-            cat << EOF > "bot$i.cfg"
-          cl_show_welcome 0
-          cl_motd_time 0
-          cl_auto_join_team 1
-          player_name "Bot_${{ matrix.instance }}_$i"
-          player_skin "$RAND_SKIN"
-          EOF
-            ./DDNet -f "bot$i.cfg" "connect 167.99.136.66:8303" > /dev/null 2>&1 &
-            sleep 2
-          done
+          cat << 'EOF' > bot.js
+          const { TeeworldsBot } = require('teeworlds-bot-api');
+          const axios = require('axios');
 
-          echo "Боты запущены. Опрос сайта me5years.alwaysdata.net..."
-          
-          LAST_ID="0"
-          while true; do
-            # Стучимся на сайт за командой
-            RESPONSE=$(curl -s "https://me5years.alwaysdata.net/index.php?action=get")
-            ID=$(echo $RESPONSE | jq -r '.id // 0')
-            TYPE=$(echo $RESPONSE | jq -r '.type // "none"')
-            VALUE=$(echo $RESPONSE | jq -r '.value // ""')
+          const server = '167.99.136.66';
+          const port = 8303;
 
-            # Если ID изменился — значит пришла новая команда
-            if [ "$ID" != "$LAST_ID" ] && [ "$ID" != "0" ]; then
-              LAST_ID=$ID
-              echo "Новая команда: $TYPE ($VALUE)"
+          async function createBot(name) {
+              const bot = new TeeworldsBot(server, port, name);
               
-              # Ищем окна игры и жмем кнопки
-              WIDS=$(xdotool search --class "ddnet")
-              for wid in $WIDS; do
-                if [ "$TYPE" == "chat" ]; then
-                  xdotool key --window $wid t
-                  sleep 0.2
-                  xdotool type --window $wid "$VALUE"
-                  sleep 0.2
-                  xdotool key --window $wid Return
-                elif [ "$TYPE" == "key" ]; then
-                  xdotool key --window $wid "$VALUE"
-                fi
-              done
-            fi
-            sleep 2
-          done
+              let lastId = 0;
+
+              // Каждые 1.5 секунды проверяем сайт на наличие команд
+              setInterval(async () => {
+                  try {
+                      const res = await axios.get(process.env.CONTROL_URL);
+                      const data = res.data;
+
+                      if (data && data.id > lastId) {
+                          lastId = data.id;
+                          console.log(`[${name}] Команда: ${data.type} - ${data.value}`);
+
+                          if (data.type === 'chat') {
+                              bot.say(data.value);
+                          } else if (data.type === 'key') {
+                              if (data.value === 'space') bot.jump();
+                              if (data.value === 'd') { bot.moveRight(); setTimeout(() => bot.stopMoving(), 500); }
+                              if (data.value === 'a') { bot.moveLeft(); setTimeout(() => bot.stopMoving(), 500); }
+                          }
+                      }
+                  } catch (e) {}
+              }, 1500);
+
+              bot.connect();
+          }
+
+          // Запускаем 6 ботов на одну машину (всего будет 30 ботов)
+          for(let i=1; i<=6; i++) {
+              createBot(`Bot_${process.env.INSTANCE}_${i}`);
+          }
+          EOF
+          
+          node bot.js
