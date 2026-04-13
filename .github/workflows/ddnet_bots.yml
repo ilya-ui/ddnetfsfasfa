@@ -18,17 +18,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb libglu1-mesa libwebpmux3 libarchive13
       
-      - name: Download DDNet Client
+      - name: Download DDNet Client (Auto-detect latest version)
         run: |
-          curl -L https://github.com/ddnet/ddnet/releases/download/18.8/DDNet-18.8-linux_x86_64.tar.xz -o ddnet.tar.xz
+          # 1. Автоматически находим ссылку на последний релиз x86_64 Linux
+          DOWNLOAD_URL=$(curl -s https://api.github.com/repos/ddnet/ddnet/releases/latest | grep browser_download_url | grep linux_x86_64.tar.xz | cut -d '"' -f 4)
+          echo "Скачиваем по ссылке: $DOWNLOAD_URL"
+          
+          # 2. Качаем архив
+          curl -L "$DOWNLOAD_URL" -o ddnet.tar.xz
+          
+          # 3. Узнаем точное имя папки внутри архива и распаковываем
+          DIR_NAME=$(tar -tf ddnet.tar.xz | head -1 | cut -f1 -d"/")
           tar -xf ddnet.tar.xz
-          mv DDNet-18.8-linux_x86_64 ddnet_folder
+          
+          # 4. Переименовываем папку для удобства
+          mv "$DIR_NAME" ddnet_folder
 
       - name: Start 4 Bots
         run: |
           cd ddnet_folder
           
           for i in {1..4}; do
+            # Запускаем клиент
             xvfb-run ./DDNet \
               "connect 46.174.48.103:51010; player_name 'Bot_${{ matrix.instance }}_$i'" \
               > /dev/null 2>&1 & 
