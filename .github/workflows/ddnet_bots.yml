@@ -1,4 +1,4 @@
-name: GitHub Proxy Farm (Fixed Auth)
+name: GitHub Proxy Farm (Final Fix)
 
 on: 
   workflow_dispatch:
@@ -26,42 +26,35 @@ jobs:
           microsocks -p 1080 &
           nohup cloudflared tunnel --url tcp://127.0.0.1:1080 > tunnel.log 2>&1 &
           
-          # Ждем чуть дольше, чтобы туннель точно поднялся
           sleep 20
           
           TUNNEL_URL=$(grep -o 'https://[-a-z0-9.]*trycloudflare.com' tunnel.log | head -n 1 | sed 's/https:\/\///')
           
           if [ -z "$TUNNEL_URL" ]; then
-            echo "URL туннеля не найден. Лог:"
-            cat tunnel.log
+            echo "URL туннеля не найден."
             exit 1
           fi
           
           echo "PROXY_ADDR=${TUNNEL_URL}:443" >> $GITHUB_ENV
-          echo "Адрес: ${TUNNEL_URL}:443"
 
       - name: Update Gist
         env:
-          # Используем твой токен
-          GH_TOKEN: "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"
+          # Теперь берем токен из секретов репозитория
+          GH_TOKEN: ${{ secrets.MY_GIST_TOKEN }}
           GIST_ID: "1d7f6c3b1a984e779265070395c0c2d4"
         run: |
-          # 1. Создаем локальный файл с прокси
           FILENAME="proxy_${{ matrix.instance }}.txt"
           echo "SOCKS5 ${{ env.PROXY_ADDR }}" > $FILENAME
           
-          # 2. Добавляем случайную паузу (от 1 до 30 сек)
-          # Это ВАЖНО, чтобы 30 машин не "толкались" при записи в один Gist
-          SLEEP_TIME=$((RANDOM % 30))
-          echo "Ждем $SLEEP_TIME сек. перед обновлением Gist..."
+          # Рандомная пауза до 40 секунд, чтобы 30 машин не создали очередь
+          SLEEP_TIME=$((RANDOM % 40))
+          echo "Ожидание $SLEEP_TIME сек..."
           sleep $SLEEP_TIME
           
-          # 3. Обновляем Gist
-          # Мы НЕ используем 'gh auth login', так как GH_TOKEN уже в ENV
-          # Используем флаг -a (--add-file) для добавления или обновления файла
-          gh gist edit "$GIST_ID" -a "$FILENAME"
+          # Обновляем Gist через официальную команду
+          gh gist edit "$GIST_ID" --add-file "$FILENAME"
           
-          echo "Gist успешно обновлен файлом $FILENAME"
+          echo "Файл $FILENAME успешно добавлен в Gist"
 
       - name: Keep Alive
         run: sleep 21600
