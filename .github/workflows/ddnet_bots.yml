@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance:[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
     
     runs-on: ubuntu-latest
     
@@ -18,21 +18,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb libglu1-mesa libwebpmux3 libarchive13
       
-      - name: Download DDNet Client (100% рабочее скачивание)
+      - name: Download DDNet Client
         run: |
-          # 1. Идем на официальный сайт и выдираем точное название последнего файла
+          # Заходим на сайт, берем ссылку на ласт версию
           LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
+          echo "Link found: $LINK"
           
-          echo "Официальный сайт выдал файл: $LINK"
-          
-          # 2. Скачиваем архив напрямую с их сервера
+          # Качаем
           if [[ "$LINK" == http* ]]; then
             curl -L -o ddnet.tar.xz "$LINK"
           else
             curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
           fi
           
-          # 3. Смотрим, как называется папка внутри, и распаковываем
+          # Распаковываем
           DIR_NAME=$(tar -tf ddnet.tar.xz | head -1 | cut -f1 -d"/")
           tar -xf ddnet.tar.xz
           mv "$DIR_NAME" ddnet_folder
@@ -42,7 +41,7 @@ jobs:
           cd ddnet_folder
           
           for i in {1..4}; do
-            # Запускаем клиент
+            # Запускаем клиент в вирт. мониторе
             xvfb-run ./DDNet \
               "connect 46.174.48.103:51010; player_name 'Bot_${{ matrix.instance }}_$i'" \
               > /dev/null 2>&1 & 
@@ -51,7 +50,6 @@ jobs:
             sleep 2
           done
           
-          echo "Все 4 бота запущены. Ждем 5 минут..."
+          echo "Все 4 бота на месте. Ждем 5 минут..."
           sleep 300
-          
-          echo "Время вышло, отключаемся."
+          echo "Выходим."
