@@ -32,8 +32,8 @@ jobs:
           const axios = require('axios');
 
           // НОВЫЙ АЙПИ
-          const server = '194.93.2.170';
-          const port = 8500;
+          const server = '45.141.57.35';
+          const port = 8307;
 
           function createBot(name) {
             const client = new Client(server, port, name);
