@@ -1,4 +1,4 @@
-name: DDNet Bot Army CONTROL
+name: DDNet Bot Army DEBUG-FINAL
 
 on: 
   workflow_dispatch:
@@ -13,10 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Install All Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          # Добавили xdotool для симуляции нажатия клавиш
           sudo apt-get install -y xvfb xdotool libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa netcat-openbsd
       
       - name: Download DDNet Client
@@ -26,20 +25,17 @@ jobs:
           tar -xf ddnet.tar.xz
           mv DDNet-* ddnet_folder
 
-      - name: Start 4 Bots with Bind System
+      - name: Start 4 Bots and SHOW LOGS
         run: |
           cd ddnet_folder
           
-          # Запускаем 4 X-сервера и 4 бота вручную для контроля клавиш
           for i in {1..4}; do
             DISPLAY_NUM=$((10 + i))
             PORT=$((8000 + i))
             
-            # 1. Создаем виртуальный экран
-            Xvfb :$DISPLAY_NUM -screen 0 1024x768x24 &
-            sleep 2
+            Xvfb :$DISPLAY_NUM -screen 0 1024x768x24 > /dev/null 2>&1 &
+            sleep 1
             
-            # 2. Создаем конфиг (авто-вход в команду и бинд)
             cat << EOF > "bot$i.cfg"
           cl_show_welcome 0
           cl_motd_time 0
@@ -48,40 +44,21 @@ jobs:
           ec_port $PORT
           ec_password 123
           bind e "say 123"
+          connect 46.174.48.103:51010
           EOF
             
-            # 3. Запускаем бота на конкретном экране
-            DISPLAY=:$DISPLAY_NUM ./DDNet -f "bot$i.cfg" "connect 194.93.2.170:8500" > /dev/null 2>&1 &
-            echo "Бот $i запущен на :$DISPLAY_NUM (Порт: $PORT)"
-          done
-
-          echo "Контроллер Gist запущен..."
-          
-          LAST_CMD=""
-          CMD_URL="https://gist.githubusercontent.com/ilya-ui/1d7f6c3b1a984e779265070395c0c2d4/raw/"
-
-          for tick in {1..200}; do
-            CURRENT_CMD=$(curl -s "${CMD_URL}?v=$(date +%s)")
-            
-            if [ -n "$CURRENT_CMD" ] && [ "$CURRENT_CMD" != "$LAST_CMD" ]; then
-              echo "Новый приказ: $CURRENT_CMD"
-              
-              for i in {1..4}; do
-                PORT=$((8000 + i))
-                DISPLAY_NUM=$((10 + i))
-                
-                # Если команда - это say, то мы обновляем бинд и жмем E
-                if [[ "$CURRENT_CMD" == say* ]]; then
-                  echo "123 bind e \"$CURRENT_CMD\"" | nc -w 1 localhost $PORT || true
-                  sleep 0.5
-                  # Жмем клавишу E на виртуальном экране бота
-                  DISPLAY=:$DISPLAY_NUM xdotool key e
-                else
-                  # Любая другая команда (vote, emote) - просто в консоль
-                  echo "123 $CURRENT_CMD" | nc -w 1 localhost $PORT || true
-                fi
-              done
-              LAST_CMD="$CURRENT_CMD"
+            # Первый бот каждой машины будет выводить ошибки в консоль GitHub
+            if [ $i -eq 1 ]; then
+              DISPLAY=:$DISPLAY_NUM ./DDNet -f "bot$i.cfg" &
+            else
+              DISPLAY=:$DISPLAY_NUM ./DDNet -f "bot$i.cfg" > /dev/null 2>&1 &
             fi
-            sleep 4
+            echo "Бот $i запущен на экране :$DISPLAY_NUM"
           done
+
+          echo "Ждем 20 секунд для проверки коннекта..."
+          sleep 20
+          
+          echo "--- ПОСЛЕДНИЕ СООБЩЕНИЯ ОТ ИГРЫ (DEBUG) ---"
+          # Если бот не зашел, тут будет написано почему
+          ps aux | grep DDNet
