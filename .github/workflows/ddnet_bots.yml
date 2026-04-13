@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 30 машин (Гитхаб запустит первые 20 сразу, остальные 10 — как освободятся места)
+        # 30 машин = 120 ботов
         instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
     
     runs-on: ubuntu-latest
@@ -31,70 +31,85 @@ jobs:
           const { Client } = require('teeworlds');
           const axios = require('axios');
 
-          // НОВЫЙ АЙПИ И ПОРТ
-          const server = '88.198.96.203';
-          const port = 8306;
+          // НОВЫЙ АЙПИ
+          const server = '87.120.186.242';
+          const port = 8303;
 
           function createBot(name) {
             const client = new Client(server, port, name);
             let lastCmdId = 0;
+            let ready = false;
 
             client.on('connected', () => {
-              console.log(`[${name}] Подключен к ${server}:${port}`);
+              console.log(`[${name}] Подключен к ${server}. Жду загрузку карты...`);
+            });
+
+            client.on('mapDetails', () => {
+              console.log(`[${name}] Карта получена. Пробую войти...`);
+              ready = true;
               
-              // Пытаемся зайти в игру максимально быстро
-              setTimeout(() => {
-                if (!client.game) return;
-                try {
-                  // Пробуем разные методы входа, чтобы не упасть с ошибкой
-                  if (client.game.changeTeam) client.game.changeTeam(0);
-                  else if (client.game.joinTeam) client.game.joinTeam(0);
-                  
-                  // Дополнительно отправляем команду в чат для гарантии входа
-                  client.game.say("/join");
-                } catch (e) {
-                  console.log(`[${name}] Ошибка при попытке входа в команду, но бот жив.`);
-                }
-              }, 1000);
+              // Пытаемся зайти трижды с паузой, чтобы наверняка
+              [1000, 3000, 6000].forEach(delay => {
+                setTimeout(() => {
+                  if (client.game) {
+                    try {
+                      client.game.changeTeam(0);
+                      client.game.say("/join");
+                    } catch(e) {}
+                  }
+                }, delay);
+              });
             });
 
             client.on('disconnect', (reason) => {
               console.log(`[${name}] Вылетел: ${reason}`);
+              ready = false;
             });
 
-            // Цикл опроса сайта на команды (1 раз в секунду)
+            // Опрос сайта Alwaysdata
             setInterval(async () => {
+              // Если бот еще не загрузил карту, не стучимся на сайт зря
+              if (!ready || !client.game) return;
+
               try {
                 const res = await axios.get(process.env.CONTROL_URL);
-                if (res.data && res.data.id > lastCmdId) {
-                  lastCmdId = res.data.id;
-                  const { type, value } = res.data;
-                  if (!client.game) return;
+                const data = res.data;
 
-                  if (type === 'chat') {
-                    client.game.say(value);
-                  } else if (type === 'key') {
-                    if (value === 'space') {
+                if (data && data.id > lastCmdId) {
+                  lastCmdId = data.id;
+                  console.log(`[${name}] Команда: ${data.type} -> ${data.value}`);
+
+                  if (data.type === 'chat') {
+                    client.game.say(data.value);
+                  } else if (data.type === 'key') {
+                    if (data.value === 'space') {
                       client.game.input.jump = 1;
-                      setTimeout(() => { client.game.input.jump = 0; }, 200);
+                      setTimeout(() => { if(client.game) client.game.input.jump = 0; }, 250);
                     }
-                    if (value === 'd') {
+                    if (data.value === 'd') {
                       client.game.input.direction = 1;
-                      setTimeout(() => { client.game.input.direction = 0; }, 800);
+                      setTimeout(() => { if(client.game) client.game.input.direction = 0; }, 1000);
                     }
-                    if (value === 'a') {
+                    if (data.value === 'a') {
                       client.game.input.direction = -1;
-                      setTimeout(() => { client.game.input.direction = 0; }, 800);
+                      setTimeout(() => { if(client.game) client.game.input.direction = 0; }, 1000);
+                    }
+                    if (data.value === 's' || data.value === 'down') {
+                        // Присесть или вниз
+                        client.game.input.targetY = 100;
+                        setTimeout(() => { if(client.game) client.game.input.targetY = 0; }, 500);
                     }
                   }
                 }
-              } catch (e) {}
-            }, 1000);
+              } catch (e) {
+                // Ошибка связи с сайтом (Alwaysdata нагружен)
+              }
+            }, 2000);
 
             client.connect();
           }
 
-          // Запускаем по 4 бота на машину (лимит на один IP)
+          // По 4 бота на машину
           createBot(`Bot_${process.env.INSTANCE}_1`);
           createBot(`Bot_${process.env.INSTANCE}_2`);
           createBot(`Bot_${process.env.INSTANCE}_3`);
