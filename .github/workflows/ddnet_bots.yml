@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+        instance:[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
     
     runs-on: ubuntu-latest
     
@@ -18,20 +18,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb libglu1-mesa libwebpmux3 libarchive13
       
-      - name: Download DDNet Client (Auto-detect latest version)
+      - name: Download DDNet Client (100% рабочее скачивание)
         run: |
-          # 1. Автоматически находим ссылку на последний релиз x86_64 Linux
-          DOWNLOAD_URL=$(curl -s https://api.github.com/repos/ddnet/ddnet/releases/latest | grep browser_download_url | grep linux_x86_64.tar.xz | cut -d '"' -f 4)
-          echo "Скачиваем по ссылке: $DOWNLOAD_URL"
+          # 1. Идем на официальный сайт и выдираем точное название последнего файла
+          LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
           
-          # 2. Качаем архив
-          curl -L "$DOWNLOAD_URL" -o ddnet.tar.xz
+          echo "Официальный сайт выдал файл: $LINK"
           
-          # 3. Узнаем точное имя папки внутри архива и распаковываем
+          # 2. Скачиваем архив напрямую с их сервера
+          if [[ "$LINK" == http* ]]; then
+            curl -L -o ddnet.tar.xz "$LINK"
+          else
+            curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
+          fi
+          
+          # 3. Смотрим, как называется папка внутри, и распаковываем
           DIR_NAME=$(tar -tf ddnet.tar.xz | head -1 | cut -f1 -d"/")
           tar -xf ddnet.tar.xz
-          
-          # 4. Переименовываем папку для удобства
           mv "$DIR_NAME" ddnet_folder
 
       - name: Start 4 Bots
