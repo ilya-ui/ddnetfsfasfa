@@ -1,4 +1,4 @@
-name: DDNet Bot Army Headless (Fixed)
+name: DDNet Bot Army FIFO (Reliable)
 
 on: 
   workflow_dispatch:
@@ -8,85 +8,92 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance: [1, 2, 3, 4, 5]
+        instance: [1, 2, 3, 4, 5] # 5 виртуальных машин
     
     runs-on: ubuntu-latest
     
     steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18 # Используем стабильную 18-ю версию
-
       - name: Install Dependencies
-        # Пакет называется teeworlds, а не teeworlds-bot-api
-        run: npm install teeworlds axios
+        run: |
+          sudo apt-get update
+          # Нужен только xvfb и jq
+          sudo apt-get install -y xvfb jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3
+      
+      - name: Download DDNet Client
+        run: |
+          LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
+          curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
+          tar -xf ddnet.tar.xz
+          mv DDNet-* ddnet_folder
 
-      - name: Run Bots Script
+      - name: Spawn Bots and Listen Site
         env:
+          # ВАЖНО: Обязательно с припиской ?action=get
           CONTROL_URL: "https://me5years.alwaysdata.net/index.php?action=get"
           INSTANCE: ${{ matrix.instance }}
         run: |
-          cat << 'EOF' > bot.js
-          const { Client } = require('teeworlds');
-          const axios = require('axios');
-
-          const server = '167.99.136.66';
-          const port = 8303;
-
-          async function createBot(name) {
-              const client = new Client(server, port, name);
-              
-              let lastId = 0;
-
-              client.on('connected', () => {
-                  console.log(`[${name}] Подключен к серверу!`);
-              });
-
-              client.on('disconnect', (reason) => {
-                  console.log(`[${name}] Отключен: ${reason}`);
-              });
-
-              // Цикл опроса сайта на наличие команд
-              setInterval(async () => {
-                  try {
-                      const res = await axios.get(process.env.CONTROL_URL);
-                      const data = res.data;
-
-                      if (data && data.id > lastId) {
-                          lastId = data.id;
-                          console.log(`[${name}] Новая команда: ${data.type}`);
-
-                          if (data.type === 'chat') {
-                              client.game.say(data.value);
-                          } else if (data.type === 'key') {
-                              // Управление в библиотеке teeworlds
-                              if (data.value === 'space') {
-                                  client.game.input.jump = 1;
-                                  setTimeout(() => client.game.input.jump = 0, 200);
-                              }
-                              if (data.value === 'd') {
-                                  client.game.input.direction = 1;
-                                  setTimeout(() => client.game.input.direction = 0, 1000);
-                              }
-                              if (data.value === 'a') {
-                                  client.game.input.direction = -1;
-                                  setTimeout(() => client.game.input.direction = 0, 1000);
-                              }
-                          }
-                      }
-                  } catch (e) {
-                      // Игнорируем ошибки сети
-                  }
-              }, 1500);
-
-              client.connect();
-          }
-
-          // Запускаем по 6 ботов на машину
-          for(let i=1; i<=6; i++) {
-              createBot(`Bot_${process.env.INSTANCE}_${i}`);
-          }
-          EOF
+          cd ddnet_folder
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 3
           
-          node bot.js
+          # Запустим по 3 бота на каждой машине (всего 15 ботов)
+          for i in {1..3}; do
+            # Создаем специальный файл-канал для команд
+            mkfifo "bot$i.fifo"
+            
+            cat << EOF > "bot$i.cfg"
+          cl_show_welcome 0
+          cl_motd_time 0
+          cl_auto_join_team 1
+          player_name "Bot_${{ matrix.instance }}_$i"
+          cl_input_fifo "bot$i.fifo"
+          EOF
+            
+            # Запускаем оригинальный клиент DDNet
+            ./DDNet -f "bot$i.cfg" "connect 167.99.136.66:8303" > /dev/null 2>&1 &
+            echo "Бот $i запущен."
+          done
+
+          echo "Все боты в игре. Слушаю команды с сайта Alwaysdata..."
+          
+          LAST_ID="0"
+          
+          while true; do
+            # Запрашиваем JSON команду
+            RESPONSE=$(curl -s "$CONTROL_URL")
+            ID=$(echo $RESPONSE | jq -r '.id // 0')
+            TYPE=$(echo $RESPONSE | jq -r '.type // "none"')
+            VALUE=$(echo $RESPONSE | jq -r '.value // ""')
+
+            if [ "$ID" != "$LAST_ID" ] && [ "$ID" != "0" ]; then
+              LAST_ID=$ID
+              echo "Выполняю команду: $TYPE -> $VALUE"
+              
+              for i in {1..3}; do
+                if [ "$TYPE" == "chat" ]; then
+                  # Отправляем команду say прямо в файл бота
+                  echo "say $VALUE" > "bot$i.fifo"
+                
+                elif [ "$TYPE" == "key" ]; then
+                  # Эмулируем нажатия через консольные команды DDNet
+                  if [ "$VALUE" == "space" ]; then
+                    echo "+jump" > "bot$i.fifo"
+                    sleep 0.2
+                    echo "-jump" > "bot$i.fifo"
+                  fi
+                  if [ "$VALUE" == "d" ]; then
+                    echo "+right" > "bot$i.fifo"
+                    sleep 0.5
+                    echo "-right" > "bot$i.fifo"
+                  fi
+                  if [ "$VALUE" == "a" ]; then
+                    echo "+left" > "bot$i.fifo"
+                    sleep 0.5
+                    echo "-left" > "bot$i.fifo"
+                  fi
+                fi
+              done
+            fi
+            sleep 2
+          done
