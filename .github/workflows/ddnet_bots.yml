@@ -51,7 +51,7 @@ jobs:
           EOF
             
             # Запускаем оригинальный клиент DDNet
-            ./DDNet -f "bot$i.cfg" "connect 167.99.136.66:8303" > /dev/null 2>&1 &
+            ./DDNet -f "bot$i.cfg" "connect 130.61.121.181:8303" > /dev/null 2>&1 &
             echo "Бот $i запущен."
           done
 
