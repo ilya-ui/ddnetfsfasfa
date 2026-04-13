@@ -8,7 +8,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance: [1, 2, 3, 4, 5]
+        # Можешь увеличить количество машин до 10, чтобы было 40 ботов
+        instance: [1, 2, 3, 4, 5] 
     
     runs-on: ubuntu-latest
     
@@ -30,39 +31,39 @@ jobs:
           const { Client } = require('teeworlds');
           const axios = require('axios');
 
-          const server = '88.198.96.203';
-          const port = 8306;
+          const server = '78.47.95.60';
+          const port = 8304;
 
-          async function createBot(name) {
+          async function createBot(name, delay) {
+            // Задержка перед созданием, чтобы сервер не забанил за частые входы
+            await new Promise(r => setTimeout(r, delay));
+
             const client = new Client(server, port, name);
             let lastCmdId = 0;
-            let isInGame = false;
 
             client.on('connected', () => {
-              console.log(`[${name}] Соединение установлено. Пытаюсь войти в игру...`);
-              // Заходим в синюю/красную команду (0 - обычный вход)
+              console.log(`[${name}] Подключен. Вхожу в игру...`);
+              // Правильный метод в этой библиотеке - changeTeam
               setTimeout(() => {
-                client.game.joinTeam(0); 
-                isInGame = true;
-                console.log(`[${name}] Команда на вход отправлена!`);
-              }, 2000);
+                if (client.game) {
+                  client.game.changeTeam(0); 
+                  console.log(`[${name}] Заспавнился!`);
+                }
+              }, 3000);
             });
 
             client.on('disconnect', (reason) => {
               console.log(`[${name}] Вылетел: ${reason}`);
-              isInGame = false;
             });
 
+            // Цикл опроса сайта
             setInterval(async () => {
               try {
                 const res = await axios.get(process.env.CONTROL_URL);
                 if (res.data && res.data.id > lastCmdId) {
                   lastCmdId = res.data.id;
                   const { type, value } = res.data;
-                  
-                  // Если бот еще не в игре, он может только копить команды, 
-                  // но мы попробуем выполнить
-                  console.log(`[${name}] Исполняю: ${type} -> ${value}`);
+                  console.log(`[${name}] Команда: ${type} -> ${value}`);
 
                   if (type === 'chat') {
                     client.game.say(value);
@@ -82,14 +83,17 @@ jobs:
                   }
                 }
               } catch (e) {}
-            }, 1000);
+            }, 1500);
 
             client.connect();
           }
 
-          for (let i = 1; i <= 6; i++) {
-            createBot(`Bot_${process.env.INSTANCE}_${i}`);
-          }
+          // Запускаем ровно 4 бота (лимит сервера на один IP)
+          // С разным временем задержки, чтобы не кикало за спам подключениями
+          createBot(`Bot_${process.env.INSTANCE}_1`, 1000);
+          createBot(`Bot_${process.env.INSTANCE}_2`, 5000);
+          createBot(`Bot_${process.env.INSTANCE}_3`, 10000);
+          createBot(`Bot_${process.env.INSTANCE}_4`, 15000);
           EOF
           
           node bot.js
