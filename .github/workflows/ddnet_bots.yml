@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+        instance:[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
     
     runs-on: ubuntu-latest
     
@@ -20,19 +20,19 @@ jobs:
       
       - name: Download DDNet Client
         run: |
-          # Заходим на сайт, берем ссылку на ласт версию
+          # Находим ссылку на последнюю версию
           LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
-          echo "Link found: $LINK"
+          echo "Качаем: $LINK"
           
-          # Качаем
           if [[ "$LINK" == http* ]]; then
             curl -L -o ddnet.tar.xz "$LINK"
           else
             curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
           fi
           
-          # Распаковываем
-          DIR_NAME=$(tar -tf ddnet.tar.xz | head -1 | cut -f1 -d"/")
+          # Аккуратно читаем имя папки и распаковываем (теперь без красной ошибки tar)
+          tar -tf ddnet.tar.xz > filelist.txt
+          DIR_NAME=$(head -1 filelist.txt | cut -d"/" -f1)
           tar -xf ddnet.tar.xz
           mv "$DIR_NAME" ddnet_folder
 
@@ -40,16 +40,37 @@ jobs:
         run: |
           cd ddnet_folder
           
+          # Список стандартных скинов DDNet
+          SKINS=("default" "bluekitty" "cammostripes" "redbopp" "bluestripe" "toptri" "twinbop" "spiky" "cammo" "coala")
+          
           for i in {1..4}; do
-            # Запускаем клиент в вирт. мониторе
-            xvfb-run ./DDNet \
-              "connect 46.174.48.103:51010; player_name 'Bot_${{ matrix.instance }}_$i'" \
-              > /dev/null 2>&1 & 
+            # Выбираем рандомный скин из массива
+            RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
             
-            echo "Бот $i с машины ${{ matrix.instance }} запущен."
+            # Генерируем 100% уникальный цвет (большое число от перемножения RANDOM)
+            BODY_COLOR=$(( RANDOM * RANDOM ))
+            FEET_COLOR=$(( RANDOM * RANDOM ))
+            
+            # Создаем уникальный конфиг-файл (autoexec) для текущего бота
+            cat << EOF > "bot$i.cfg"
+          cl_show_welcome 0
+          player_name "Bot_${{ matrix.instance }}_$i"
+          player_skin "$RAND_SKIN"
+          player_use_custom_color 1
+          player_color_body $BODY_COLOR
+          player_color_feet $FEET_COLOR
+          connect 46.174.48.103:51010
+          EOF
+            
+            # Запускаем игру! 
+            # Флаг "-a" у xvfb-run дает каждому боту свой уникальный экран, чтобы они не крашились.
+            # Команда "exec bot$i.cfg" заставит клиент сразу же прочитать конфиг и зайти.
+            xvfb-run -a ./DDNet "exec bot$i.cfg" > /dev/null 2>&1 & 
+            
+            echo "Бот $i с машины ${{ matrix.instance }} (Скин: $RAND_SKIN) успешно запущен."
             sleep 2
           done
           
-          echo "Все 4 бота на месте. Ждем 5 минут..."
+          echo "Все 4 бота запущены! Держим их на сервере 5 минут..."
           sleep 300
-          echo "Выходим."
+          echo "Время вышло, отключаемся."
