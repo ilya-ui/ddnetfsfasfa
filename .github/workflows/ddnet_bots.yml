@@ -43,7 +43,7 @@ jobs:
           player_name "Bot_${{ matrix.instance }}_$i"
           player_skin "$RAND_SKIN"
           EOF
-            ./DDNet -f "bot$i.cfg" "connect 78.47.95.60:8304" > /dev/null 2>&1 &
+            ./DDNet -f "bot$i.cfg" "connect 167.99.136.66:8303" > /dev/null 2>&1 &
             sleep 2
           done
 
