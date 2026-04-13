@@ -51,7 +51,7 @@ jobs:
           EOF
             
             # 3. Запускаем бота на конкретном экране
-            DISPLAY=:$DISPLAY_NUM ./DDNet -f "bot$i.cfg" "connect 46.174.48.103:51010" > /dev/null 2>&1 &
+            DISPLAY=:$DISPLAY_NUM ./DDNet -f "bot$i.cfg" "connect 77.110.105.224:8303" > /dev/null 2>&1 &
             echo "Бот $i запущен на :$DISPLAY_NUM (Порт: $PORT)"
           done
 
