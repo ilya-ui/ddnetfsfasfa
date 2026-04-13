@@ -31,7 +31,7 @@ jobs:
       - name: Spawn & Control Army
         env:
           CONTROL_URL: "https://me5years.alwaysdata.net/index.php?action=get"
-          SERVER_ADDR: "194.93.2.170:8501"
+          SERVER_ADDR: "213.171.25.11:8307"
         run: |
           cd ddnet_folder
           
