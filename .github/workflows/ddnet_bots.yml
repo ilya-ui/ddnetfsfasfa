@@ -1,10 +1,10 @@
-name: DDNet Army + Gist Proxy Control
+name: GitHub Proxy Farm (Fixed Auth)
 
 on: 
   workflow_dispatch:
 
 jobs:
-  army-and-proxy:
+  proxy-node:
     strategy:
       fail-fast: false
       matrix:
@@ -13,86 +13,55 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Install Dependencies
+      - name: Install Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xdotool jq microsocks curl
-          # Установка Cloudflared
+          sudo apt-get install -y microsocks curl
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared.deb
 
-      - name: Start Proxy Tunnel & Update Gist
+      - name: Start Proxy & Tunnel
+        id: tunnel
+        run: |
+          microsocks -p 1080 &
+          nohup cloudflared tunnel --url tcp://127.0.0.1:1080 > tunnel.log 2>&1 &
+          
+          # Ждем чуть дольше, чтобы туннель точно поднялся
+          sleep 20
+          
+          TUNNEL_URL=$(grep -o 'https://[-a-z0-9.]*trycloudflare.com' tunnel.log | head -n 1 | sed 's/https:\/\///')
+          
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "URL туннеля не найден. Лог:"
+            cat tunnel.log
+            exit 1
+          fi
+          
+          echo "PROXY_ADDR=${TUNNEL_URL}:443" >> $GITHUB_ENV
+          echo "Адрес: ${TUNNEL_URL}:443"
+
+      - name: Update Gist
         env:
-          # Твой токен и ID гиста
+          # Используем твой токен
           GH_TOKEN: "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"
           GIST_ID: "1d7f6c3b1a984e779265070395c0c2d4"
         run: |
-          # 1. Запуск прокси
-          microsocks -p 1080 &
+          # 1. Создаем локальный файл с прокси
+          FILENAME="proxy_${{ matrix.instance }}.txt"
+          echo "SOCKS5 ${{ env.PROXY_ADDR }}" > $FILENAME
           
-          # 2. Запуск туннеля (ждем появления URL)
-          nohup cloudflared tunnel --url tcp://127.0.0.1:1080 > tunnel.log 2>&1 &
-          sleep 12
+          # 2. Добавляем случайную паузу (от 1 до 30 сек)
+          # Это ВАЖНО, чтобы 30 машин не "толкались" при записи в один Gist
+          SLEEP_TIME=$((RANDOM % 30))
+          echo "Ждем $SLEEP_TIME сек. перед обновлением Gist..."
+          sleep $SLEEP_TIME
           
-          # 3. Вытаскиваем адрес туннеля
-          TUNNEL_URL=$(grep -o 'https://[-a-z0-9.]*trycloudflare.com' tunnel.log | head -n 1 | sed 's/https:\/\///')
-          PROXY_ADDR="${TUNNEL_URL}:443"
-          echo "Instance ${{ matrix.instance }} Proxy: $PROXY_ADDR"
+          # 3. Обновляем Gist
+          # Мы НЕ используем 'gh auth login', так как GH_TOKEN уже в ENV
+          # Используем флаг -a (--add-file) для добавления или обновления файла
+          gh gist edit "$GIST_ID" -a "$FILENAME"
           
-          # 4. Записываем прокси в Gist (каждая машина в свой файл, чтобы не было конфликтов)
-          echo "$GH_TOKEN" | gh auth login --with-token
-          gh gist edit $GIST_ID --add-file "proxy_${{ matrix.instance }}.txt" - <<< "$PROXY_ADDR"
+          echo "Gist успешно обновлен файлом $FILENAME"
 
-      - name: Download & Run DDNet
-        run: |
-          LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
-          curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
-          tar -xf ddnet.tar.xz
-          mv DDNet-* ddnet_folder
-
-      - name: Control Loop (Gist Listening)
-        env:
-          # Используем "вечно свежую" ссылку без хэша коммита
-          GIST_RAW_URL: "https://gist.githubusercontent.com/ilya-ui/1d7f6c3b1a984e779265070395c0c2d4/raw/gistfile1.txt"
-        run: |
-          cd ddnet_folder
-          export DISPLAY=:99
-          Xvfb :99 -screen 0 1024x768x24 &
-          sleep 3
-          
-          # Запуск 4 ботов
-          for i in {1..4}; do
-            ./DDNet "connect 5.189.17.23:2126" > /dev/null 2>&1 &
-            sleep 2
-          done
-
-          LAST_CMD=""
-          echo "Боты в игре. Слушаю Gist..."
-
-          while true; do
-            # Качаем текущую команду
-            # Добавляем случайное число в конце, чтобы Гитхаб не отдавал старую версию из кэша
-            CURRENT_CMD=$(curl -s -L "${GIST_RAW_URL}?nocache=$RANDOM")
-            
-            if [ "$CURRENT_CMD" != "$LAST_CMD" ] && [ -n "$CURRENT_CMD" ]; then
-              LAST_CMD="$CURRENT_CMD"
-              echo "Новая команда: $CURRENT_CMD"
-              
-              TYPE=$(echo $CURRENT_CMD | cut -d' ' -f1)
-              VALUE=$(echo $CURRENT_CMD | cut -d' ' -f2-)
-              
-              WIDS=$(xdotool search --class "DDNet")
-              for WID in $WIDS; do
-                if [ "$TYPE" == "say" ]; then
-                  xdotool key --window $WID t
-                  sleep 0.2
-                  xdotool type --window $WID "$VALUE"
-                  sleep 0.2
-                  xdotool key --window $WID Return
-                elif [ "$TYPE" == "key" ]; then
-                  xdotool key --window $WID "$VALUE"
-                fi
-              done
-            fi
-            sleep 5
-          done
+      - name: Keep Alive
+        run: sleep 21600
