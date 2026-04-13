@@ -1,4 +1,4 @@
-name: DDNet Bot Army Final
+name: DDNet Bot Army CONTROL
 
 on: 
   workflow_dispatch:
@@ -16,59 +16,60 @@ jobs:
       - name: Install All Dependencies
         run: |
           sudo apt-get update
-          # Пакеты для Ubuntu 24.04: libgl1 и libglx-mesa0 вместо старого mesa-glx
-          sudo apt-get install -y xvfb libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libopus0 libopusfile0 libpng16-16 libsqlite3-0 libvorbis0a libvorbisenc2 libvorbisfile3 libx11-6 libxext6 libxrender1
+          sudo apt-get install -y xvfb libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libopus0 libopusfile0 libpng16-16 libsqlite3-0 libvorbis0a libvorbisenc2 libvorbisfile3 libx11-6 libxext6 libxrender1 netcat-openbsd
       
       - name: Download DDNet Client
         run: |
-          # Парсим прямую ссылку с сайта
           LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
-          if [[ "$LINK" == http* ]]; then
-            curl -L -o ddnet.tar.xz "$LINK"
-          else
-            curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
-          fi
+          curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
           tar -xf ddnet.tar.xz
-          DIR_NAME=$(ls -d DDNet-*)
-          mv "$DIR_NAME" ddnet_folder
+          mv DDNet-* ddnet_folder
 
-      - name: Start 4 Bots
+      - name: Start 4 Bots with Remote Control
         run: |
           cd ddnet_folder
           
           SKINS=("default" "bluekitty" "cammostripes" "redbopp" "bluestripe" "toptri" "twinbop" "spiky" "cammo" "coala")
           
           for i in {1..4}; do
+            PORT=$((8000 + i))
             RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
-            BODY_COLOR=$(( RANDOM * 65535 ))
-            FEET_COLOR=$(( RANDOM * 65535 ))
             
-            # Пишем конфиг
+            # Конфиг: включаем ec_port для управления
             cat << EOF > "bot$i.cfg"
           cl_show_welcome 0
           cl_motd_time 0
           player_name "Bot_${{ matrix.instance }}_$i"
           player_skin "$RAND_SKIN"
-          player_use_custom_color 1
-          player_color_body $BODY_COLOR
-          player_color_feet $FEET_COLOR
+          ec_port $PORT
+          ec_password 123
           EOF
             
-            echo "Запуск бота $i..."
-            # xvfb-run -a (авто-номер дисплея) критически важен для запуска пачки ботов
-            xvfb-run -a -s "-screen 0 1024x768x24" ./DDNet -f "bot$i.cfg" "connect 194.93.2.170:8501" > "debug_bot_$i.log" 2>&1 &
-            sleep 4
+            # Запуск бота
+            xvfb-run -a -s "-screen 0 1024x768x24" ./DDNet -f "bot$i.cfg" "connect 46.174.48.103:51010" > /dev/null 2>&1 &
+            echo "Бот $i запущен (Экран: $PORT)"
           done
 
-          echo "Ожидание коннекта..."
-          sleep 15
+          echo "Подключение к твоему Gist для управления..."
           
-          echo "--- ЛОГ ПЕРВОГО БОТА (ДЛЯ ПРОВЕРКИ) ---"
-          if [ -f debug_bot_1.log ]; then
-            tail -n 25 debug_bot_1.log
-          else
-            echo "Лог файл не создан!"
-          fi
+          LAST_CMD=""
+          # Твой Raw Gist
+          CMD_URL="https://gist.githubusercontent.com/ilya-ui/1d7f6c3b1a984e779265070395c0c2d4/raw/"
 
-          echo "Боты в работе 5 минут..."
-          sleep 300
+          # Цикл работает ~15 минут
+          for tick in {1..300}; do
+            # Качаем команду (добавляем рандомный параметр от кэша)
+            CURRENT_CMD=$(curl -s "${CMD_URL}?v=$(date +%s)")
+            
+            # Если в Gist что-то написано и это не старая команда
+            if [ -n "$CURRENT_CMD" ] && [ "$CURRENT_CMD" != "$LAST_CMD" ]; then
+              echo "Исполняю команду: $CURRENT_CMD"
+              for PORT in {8001..8004}; do
+                # Отправка в консоль бота: ПАРОЛЬ КОМАНДА
+                echo "123 $CURRENT_CMD" | nc -w 1 localhost $PORT || true
+              done
+              LAST_CMD="$CURRENT_CMD"
+            fi
+            
+            sleep 3 # Проверка каждые 3 секунды
+          done
