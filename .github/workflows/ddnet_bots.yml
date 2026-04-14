@@ -2,14 +2,19 @@ name: DDNet Bot Army Official Control
 
 on: 
   workflow_dispatch:
+    inputs:
+      server_ip:
+        description: 'IP:PORT сервера DDNet'
+        required: true
+        default: '5.189.17.23:2126'
 
 jobs:
   spawn-bots:
     strategy:
       fail-fast: false
       matrix:
-        # Запускаем ровно 20 машин без очередей. 20 машин * 4 бота = 80 ботов онлайн.
-        instance:[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        # ВНИМАНИЕ: Пробел после "instance:" обязателен!
+        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     
     runs-on: ubuntu-latest
     
@@ -28,9 +33,9 @@ jobs:
 
       - name: Spawn & Control Army
         env:
-          # ТУТ ВСТАВЬ ССЫЛКУ НА СВОЙ CLOUDFLARE WORKER
-          CONTROL_URL: "lively-king-450c.5yearsme5.workers.dev"
-          SERVER_ADDR: "87.120.186.242:8303"
+          # Впиши сюда свою ссылку на Cloudflare Worker
+          CONTROL_URL: "https://bot-control.TVOY-NICK.workers.dev/"
+          SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
         run: |
           cd ddnet_folder
           
@@ -39,7 +44,7 @@ jobs:
           Xvfb :99 -screen 0 1024x768x24 &
           sleep 3
 
-          # Запуск 4 ботов с рандомными скинами
+          # Запуск 4 ботов
           SKINS=("default" "bluekitty" "cammostripes" "redbopp" "bluestripe")
           for i in {1..4}; do
             RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
@@ -50,32 +55,28 @@ jobs:
           player_name "Bot_${{ matrix.instance }}_$i"
           player_skin "$RAND_SKIN"
           EOF
-            # Запуск клиента
             ./DDNet -f "bot$i.cfg" "connect $SERVER_ADDR" > /dev/null 2>&1 &
-            # Этот sleep нужен, чтобы DDNet успевал прогрузиться и сервера не отклоняли спам-подключения
             sleep 2
           done
 
-          echo "Армия заспавнена. Слушаю команды от Cloudflare..."
+          echo "Армия запущена на сервер $SERVER_ADDR. Ожидание команд..."
           
           LAST_ID="0"
           while true; do
-            # Запрашиваем команду (с защитой от зависания --max-time 3)
+            # Опрос сервера команд
             CMD_JSON=$(curl -s --max-time 3 "$CONTROL_URL" || echo '{"id":"0"}')
             ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
             
-            # Если команда новая
             if [ "$ID" != "$LAST_ID" ] && [ "$ID" != "0" ]; then
               LAST_ID=$ID
               TYPE=$(echo "$CMD_JSON" | jq -r '.type')
               VAL=$(echo "$CMD_JSON" | jq -r '.value')
               
-              echo "Команда принята: $TYPE -> $VAL"
+              echo "Команда: $TYPE -> $VAL"
               
               WIDS=$(xdotool search --class "DDNet")
-              
               for WID in $WIDS; do
-                if[ "$TYPE" == "chat" ]; then
+                if [ "$TYPE" == "chat" ]; then
                   xdotool key --window $WID t
                   sleep 0.1
                   xdotool type --window $WID "$VAL"
@@ -86,7 +87,5 @@ jobs:
                 fi
               done
             fi
-            
-            # Жизненно важный sleep. Меньше 2-х секунд убьет твой аккаунт на GitHub.
             sleep 2
           done
