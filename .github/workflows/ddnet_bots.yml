@@ -32,7 +32,7 @@ jobs:
 
       - name: Spawn & Control Army
         env:
-          CONTROL_URL: "https://bot-control.TVOY-NICK.workers.dev/"
+          CONTROL_URL: "lively-king-450c.5yearsme5.workers.dev"
           SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
         run: |
           cd ddnet_folder
