@@ -13,7 +13,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # ВНИМАНИЕ: Пробел после "instance:" обязателен!
         instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     
     runs-on: ubuntu-latest
@@ -22,8 +21,21 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3
+          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3 libgl1-mesa-dri mesa-utils
       
+      - name: Setup WARP (Change IP)
+        run: |
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb[signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ jammy main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt-get update
+          sudo apt-get install -y cloudflare-warp
+          warp-cli --accept-tos registration new
+          warp-cli --accept-tos mode warp
+          warp-cli --accept-tos connect
+          sleep 5
+          echo "Новый IP машины:"
+          curl -s https://ifconfig.me
+
       - name: Download DDNet Client
         run: |
           LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
@@ -33,37 +45,47 @@ jobs:
 
       - name: Spawn & Control Army
         env:
-          # Впиши сюда свою ссылку на Cloudflare Worker
-          CONTROL_URL: "https://bot-control.TVOY-NICK.workers.dev/"
+          CONTROL_URL: "https://bot-control.YOUR-NICK.workers.dev/"
           SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
         run: |
           cd ddnet_folder
           
-          # Запуск виртуального экрана
+          # Настройка виртуального экрана с программным рендерингом
           export DISPLAY=:99
-          Xvfb :99 -screen 0 1024x768x24 &
+          Xvfb :99 -screen 0 1024x768x24 +extension GLX +render -noreset &
           sleep 3
+          export LIBGL_ALWAYS_SOFTWARE=1
 
           # Запуск 4 ботов
           SKINS=("default" "bluekitty" "cammostripes" "redbopp" "bluestripe")
           for i in {1..4}; do
             RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
+            # Записываем коннект прямо в конфиг
             cat << EOF > "bot$i.cfg"
           cl_show_welcome 0
           cl_motd_time 0
           cl_auto_join_team 1
           player_name "Bot_${{ matrix.instance }}_$i"
           player_skin "$RAND_SKIN"
+          connect "$SERVER_ADDR"
           EOF
-            ./DDNet -f "bot$i.cfg" "connect $SERVER_ADDR" > /dev/null 2>&1 &
-            sleep 2
+            # Запускаем и НЕ скрываем логи первого бота, чтобы видеть ошибки
+            if [ $i -eq 1 ]; then
+              ./DDNet -f "bot$i.cfg" > bot_log.txt 2>&1 &
+            else
+              ./DDNet -f "bot$i.cfg" > /dev/null 2>&1 &
+            fi
+            sleep 3
           done
 
-          echo "Армия запущена на сервер $SERVER_ADDR. Ожидание команд..."
+          echo "Боты запущены. Если не зашли, проверь логи ниже."
           
           LAST_ID="0"
+          # Цикл опроса команд
           while true; do
-            # Опрос сервера команд
+            # Каждые 10 секунд выводим хвост лога первого бота для отладки
+            tail -n 5 bot_log.txt || true
+            
             CMD_JSON=$(curl -s --max-time 3 "$CONTROL_URL" || echo '{"id":"0"}')
             ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
             
@@ -72,15 +94,13 @@ jobs:
               TYPE=$(echo "$CMD_JSON" | jq -r '.type')
               VAL=$(echo "$CMD_JSON" | jq -r '.value')
               
-              echo "Команда: $TYPE -> $VAL"
-              
               WIDS=$(xdotool search --class "DDNet")
               for WID in $WIDS; do
                 if [ "$TYPE" == "chat" ]; then
                   xdotool key --window $WID t
-                  sleep 0.1
+                  sleep 0.2
                   xdotool type --window $WID "$VAL"
-                  sleep 0.1
+                  sleep 0.2
                   xdotool key --window $WID Return
                 elif [ "$TYPE" == "key" ]; then
                   xdotool key --window $WID "$VAL"
