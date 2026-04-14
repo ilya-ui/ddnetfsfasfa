@@ -29,8 +29,8 @@ jobs:
       - name: Spawn & Control Army
         env:
           # ТУТ ВСТАВЬ ССЫЛКУ НА СВОЙ CLOUDFLARE WORKER
-          CONTROL_URL: "https://bot-control.TVOY-NICK.workers.dev/"
-          SERVER_ADDR: "5.189.17.23:2126"
+          CONTROL_URL: "lively-king-450c.5yearsme5.workers.dev"
+          SERVER_ADDR: "87.120.186.242:8303"
         run: |
           cd ddnet_folder
           
