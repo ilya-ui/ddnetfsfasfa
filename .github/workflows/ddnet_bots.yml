@@ -37,15 +37,13 @@ jobs:
         run: |
           cd ddnet_folder
           
-          # 1. Запуск виртуального дисплея
+          # Запуск виртуального экрана
           export DISPLAY=:99
           Xvfb :99 -screen 0 1024x768x24 +extension GLX +render -noreset &
           sleep 3
-          
-          # 2. ВАЖНО: Заставляем DDNet рисовать графику процессором (чтобы не вылетал без видюхи)
           export LIBGL_ALWAYS_SOFTWARE=1
 
-          # 3. Создаем конфиги и запускаем 4 ботов
+          # Настройка ботов
           SKINS=("default" "bluekitty" "cammostripes" "redbopp" "bluestripe")
           for i in {1..4}; do
             RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
@@ -55,23 +53,26 @@ jobs:
           cl_auto_join_team 1
           player_name "Bot_${{ matrix.instance }}_$i"
           player_skin "$RAND_SKIN"
+          connect "$SERVER_ADDR"
           EOF
-            # Запуск: передаем адрес сервера прямо в аргументах
-            ./DDNet -f "bot$i.cfg" "connect $SERVER_ADDR" > /dev/null 2>&1 &
+            # Запускаем и пишем лог первого бота в файл для отладки
+            if [ $i -eq 1 ]; then
+              ./DDNet -f "bot$i.cfg" > bot_debug.log 2>&1 &
+            else
+              ./DDNet -f "bot$i.cfg" > /dev/null 2>&1 &
+            fi
             sleep 2
           done
 
-          echo "Боты запущены на $SERVER_ADDR. Начинаю цикл команд..."
+          echo "Боты запущены на $SERVER_ADDR"
           
           LAST_ID="0"
           while true; do
-            # Проверяем, живы ли процессы DDNet (для отладки в логах)
-            if ! pgrep -x "DDNet" > /dev/null; then
-              echo "Критическая ошибка: Все процессы DDNet вылетели!"
-              exit 1
-            fi
+            # ВЫВОДИМ ПОСЛЕДНИЕ 3 СТРОКИ ЛОГА ИГРЫ (чтобы ты видел, что происходит)
+            echo "--- LOG DEBUG ---"
+            tail -n 3 bot_debug.log || true
+            echo "-----------------"
 
-            # Получаем команду
             CMD_JSON=$(curl -s --max-time 3 "$CONTROL_URL" || echo '{"id":"0"}')
             ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
             
@@ -79,8 +80,6 @@ jobs:
               LAST_ID=$ID
               TYPE=$(echo "$CMD_JSON" | jq -r '.type')
               VAL=$(echo "$CMD_JSON" | jq -r '.value')
-              
-              echo "Принято: $TYPE -> $VAL"
               
               WIDS=$(xdotool search --class "DDNet")
               for WID in $WIDS; do
@@ -95,5 +94,5 @@ jobs:
                 fi
               done
             fi
-            sleep 2
+            sleep 5
           done
