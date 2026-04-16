@@ -6,7 +6,7 @@ on:
       server_ip:
         description: 'IP:PORT сервера DDNet'
         required: true
-        default: '87.120.186.242:8303'
+        default: '5.189.17.23:2126'
 
 jobs:
   spawn-bots:
@@ -25,25 +25,28 @@ jobs:
       
       - name: Connect to Residential VPN (VPNGate)
         run: |
-          # Качаем список волонтерских серверов
+          # Качаем свежий список волонтерских серверов
           curl -s https://www.vpngate.net/api/iphone/ > vpn_list.csv
           
-          # Выбираем случайную строку (сервер), где есть OpenVPN конфиг
-          # Мы берем случайный сервер, чтобы 20 машин не сели на один и тот же
-          RAND_LINE=$(grep "OpenVPN_ConfigData_Base64" vpn_list.csv | shuf -n 1)
+          # Извлекаем случайный рабочий конфиг (15-я колонка в CSV)
+          # Очищаем от мусора и декодируем
+          RAW_CONFIG=$(awk -F',' '/OpenVPN_ConfigData_Base64/{print $15}' vpn_list.csv | shuf -n 1 | tr -d '\r')
           
-          # Извлекаем конфиг и декодируем его
-          echo "$RAND_LINE" | cut -d',' -f15 | base64 -d > client.ovpn
+          if [ -z "$RAW_CONFIG" ]; then
+            echo "Не удалось получить конфиг, пробую еще раз..."
+            RAW_CONFIG=$(awk -F',' '/OpenVPN_ConfigData_Base64/{print $15}' vpn_list.csv | shuf -n 1 | tr -d '\r')
+          fi
           
-          # Запускаем OpenVPN в фоне
-          sudo openvpn --config client.ovpn --daemon
+          echo "$RAW_CONFIG" | base64 -d > client.ovpn
           
-          # Ждем до 20 секунд, пока поднимется интерфейс tun0
-          echo "Ожидание подключения к волонтерскому IP..."
-          for i in {1..20}; do
+          # Запускаем OpenVPN
+          sudo openvpn --config client.ovpn --daemon --auth-nocache
+          
+          echo "Ожидаем подключение (туннель tun0)..."
+          for i in {1..15}; do
             if ip addr show tun0 > /dev/null 2>&1; then
               echo "VPN Подключен!"
-              curl -s https://ifconfig.me
+              curl -s --max-time 5 https://ifconfig.me || echo "IP скрыт туннелем"
               break
             fi
             sleep 2
@@ -58,45 +61,60 @@ jobs:
 
       - name: Spawn & Control Army
         env:
+          # Твоя ссылка на управление
           CONTROL_URL: "https://lively-king-450c.5yearsme5.workers.dev/"
           SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
         run: |
           cd ddnet_folder
+          
+          # Настройка графики
           export DISPLAY=:99
           Xvfb :99 -screen 0 1024x768x24 +extension GLX +render -noreset &
           sleep 3
           export LIBGL_ALWAYS_SOFTWARE=1
 
-          # Имена без слова "Bot" - это важно!
-          NAMES=("Player" "Guest" "Zonker" "Tee" "Mee" "Panda" "Koala" "Fly" "Dash" "Jump")
+          # Список человеческих ников
+          NAMES=("Ivan" "Pavel" "Sanya" "Maks" "Dimon" "Kot" "Legend" "TeePlayer" "Killer" "Sonic" "Pro" "Zora" "Panda" "Apple" "Mister")
 
           for i in {1..4}; do
             RAND_NAME=${NAMES[$RANDOM % ${#NAMES[@]}]}
+            # Генерируем ник без слова "Bot"
+            HUMAN_NAME="${RAND_NAME}_$((RANDOM % 999))"
+            
             cat << EOF > "bot$i.cfg"
           cl_show_welcome 0
           cl_motd_time 0
           cl_auto_join_team 1
-          player_name "${RAND_NAME}_$((RANDOM % 9999))"
+          player_name "$HUMAN_NAME"
           connect "$SERVER_ADDR"
           EOF
-            ./DDNet -f "bot$i.cfg" > bot_$i.log 2>&1 &
+            # Запуск и логирование первого бота для отладки
+            if [ $i -eq 1 ]; then
+              ./DDNet -f "bot$i.cfg" > bot_debug.log 2>&1 &
+            else
+              ./DDNet -f "bot$i.cfg" > /dev/null 2>&1 &
+            fi
+            # Ждем 10 секунд перед запуском следующего бота (анти-спам)
             sleep 10
           done
 
-          echo "Армия заведена через волонтерский VPN."
+          echo "Боты запущены через VPN. Ожидаю команды..."
           
           LAST_ID="0"
           while true; do
-            # Если VPN упал - лог это покажет
-            tail -n 1 bot_1.log || true
+            # Вывод лога для проверки на бан
+            echo "--- STATUS ---"
+            tail -n 1 bot_debug.log || true
             
-            CMD_JSON=$(curl -s --max-time 5 "$CONTROL_URL" || echo '{"id":"0"}')
+            CMD_JSON=$(curl -s --max-time 3 "$CONTROL_URL" || echo '{"id":"0"}')
             ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
             
             if [ "$ID" != "$LAST_ID" ] && [ "$ID" != "0" ]; then
               LAST_ID=$ID
               TYPE=$(echo "$CMD_JSON" | jq -r '.type')
               VAL=$(echo "$CMD_JSON" | jq -r '.value')
+              
+              echo "Команда принята: $TYPE -> $VAL"
               
               WIDS=$(xdotool search --class "DDNet")
               for WID in $WIDS; do
@@ -111,5 +129,5 @@ jobs:
                 fi
               done
             fi
-            sleep 3
+            sleep 4
           done
