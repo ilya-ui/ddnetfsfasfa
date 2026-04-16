@@ -13,7 +13,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance:[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        # ВНИМАНИЕ: Тут стоял пробел, я его поправил
+        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     
     runs-on: ubuntu-latest
     
@@ -28,20 +29,22 @@ jobs:
           # Качаем свежий список волонтерских серверов
           curl -s https://www.vpngate.net/api/iphone/ > vpn_list.csv
           
-          # 1. Удаляем строки начинающиеся с # и * (заголовки)
-          # 2. Берем 15-ю колонку
-          # 3. Удаляем пустые строки
-          # 4. Выбираем 1 случайный сервер
-          # 5. Удаляем невидимые символы \r
+          # Извлекаем случайный рабочий конфиг (15-я колонка в CSV)
+          # Пропускаем загороловки и пустые строки
           RAW_CONFIG=$(grep -vE "^#|^\*" vpn_list.csv | awk -F',' '{print $15}' | grep -v "^$" | shuf -n 1 | tr -d '\r')
           
-          # Декодируем с флагом --ignore-garbage (игнорирует любой мусор)
+          if [ -z "$RAW_CONFIG" ]; then
+            echo "Не удалось получить конфиг, пробую еще раз..."
+            RAW_CONFIG=$(grep -vE "^#|^\*" vpn_list.csv | awk -F',' '{print $15}' | grep -v "^$" | shuf -n 1 | tr -d '\r')
+          fi
+          
+          # Декодируем с игнорированием мусора
           echo "$RAW_CONFIG" | base64 --decode --ignore-garbage > client.ovpn
           
           # Запускаем OpenVPN
           sudo openvpn --config client.ovpn --daemon --auth-nocache
           
-          echo "Ожидаем подключение к волонтерскому серверу (туннель tun0)..."
+          echo "Ожидаем подключение (туннель tun0)..."
           for i in {1..15}; do
             if ip addr show tun0 > /dev/null 2>&1; then
               echo "VPN Подключен!"
@@ -77,7 +80,6 @@ jobs:
 
           for i in {1..4}; do
             RAND_NAME=${NAMES[$RANDOM % ${#NAMES[@]}]}
-            # Генерируем ник без слова "Bot"
             HUMAN_NAME="${RAND_NAME}_$((RANDOM % 999))"
             
             cat << EOF > "bot$i.cfg"
@@ -87,21 +89,18 @@ jobs:
           player_name "$HUMAN_NAME"
           connect "$SERVER_ADDR"
           EOF
-            # Запуск и логирование первого бота для отладки
             if [ $i -eq 1 ]; then
               ./DDNet -f "bot$i.cfg" > bot_debug.log 2>&1 &
             else
               ./DDNet -f "bot$i.cfg" > /dev/null 2>&1 &
             fi
-            # Ждем 10 секунд перед запуском следующего бота (анти-спам)
             sleep 10
           done
 
-          echo "Боты запущены через VPN. Ожидаю команды..."
+          echo "Боты запущены. Ожидаю команды..."
           
           LAST_ID="0"
           while true; do
-            # Вывод лога для проверки на бан
             echo "--- STATUS ---"
             tail -n 1 bot_debug.log || true
             
@@ -113,11 +112,9 @@ jobs:
               TYPE=$(echo "$CMD_JSON" | jq -r '.type')
               VAL=$(echo "$CMD_JSON" | jq -r '.value')
               
-              echo "Команда принята: $TYPE -> $VAL"
-              
               WIDS=$(xdotool search --class "DDNet")
               for WID in $WIDS; do
-                if[ "$TYPE" == "chat" ]; then
+                if [ "$TYPE" == "chat" ]; then
                   xdotool key --window $WID t
                   sleep 0.2
                   xdotool type --window $WID "$VAL"
