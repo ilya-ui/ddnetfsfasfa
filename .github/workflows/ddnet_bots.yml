@@ -13,7 +13,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # ВНИМАНИЕ: Тут стоял пробел, я его поправил
         instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     
     runs-on: ubuntu-latest
@@ -24,35 +23,43 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3 libgl1-mesa-dri openvpn
       
-      - name: Connect to Residential VPN (VPNGate)
+      - name: Connect to Residential VPN
         run: |
-          # Качаем свежий список волонтерских серверов
+          # 1. Запоминаем старый IP (Гитхаба)
+          OLD_IP=$(curl -s --max-time 5 https://ifconfig.me || echo "unknown")
+          echo "Старый IP (GitHub): $OLD_IP"
+
+          # 2. Качаем список серверов
           curl -s https://www.vpngate.net/api/iphone/ > vpn_list.csv
           
-          # Извлекаем случайный рабочий конфиг (15-я колонка в CSV)
-          # Пропускаем загороловки и пустые строки
+          # 3. Выбираем случайный рабочий конфиг
           RAW_CONFIG=$(grep -vE "^#|^\*" vpn_list.csv | awk -F',' '{print $15}' | grep -v "^$" | shuf -n 1 | tr -d '\r')
-          
-          if [ -z "$RAW_CONFIG" ]; then
-            echo "Не удалось получить конфиг, пробую еще раз..."
-            RAW_CONFIG=$(grep -vE "^#|^\*" vpn_list.csv | awk -F',' '{print $15}' | grep -v "^$" | shuf -n 1 | tr -d '\r')
-          fi
-          
-          # Декодируем с игнорированием мусора
           echo "$RAW_CONFIG" | base64 --decode --ignore-garbage > client.ovpn
           
-          # Запускаем OpenVPN
+          # 4. Принудительно добавляем маршрутизацию всего трафика через VPN
+          echo "redirect-gateway def1" >> client.ovpn
+          echo "dhcp-option DNS 8.8.8.8" >> client.ovpn
+
+          # 5. Запускаем OpenVPN
           sudo openvpn --config client.ovpn --daemon --auth-nocache
           
-          echo "Ожидаем подключение (туннель tun0)..."
-          for i in {1..15}; do
-            if ip addr show tun0 > /dev/null 2>&1; then
-              echo "VPN Подключен!"
-              curl -s --max-time 5 https://ifconfig.me || echo "IP скрыт туннелем"
+          echo "Ожидаем смену IP..."
+          VPN_SUCCESS=false
+          for i in {1..20}; do
+            sleep 3
+            NEW_IP=$(curl -s --max-time 5 https://ifconfig.me || echo "waiting")
+            if [[ "$NEW_IP" != "$OLD_IP" && "$NEW_IP" != "waiting" && "$NEW_IP" != "unknown" ]]; then
+              echo "✅ VPN ВКЛЮЧЕН! Новый IP: $NEW_IP"
+              VPN_SUCCESS=true
               break
             fi
-            sleep 2
+            echo "Попытка $i: IP всё еще $NEW_IP..."
           done
+
+          if [ "$VPN_SUCCESS" = false ]; then
+            echo "❌ Не удалось сменить IP за 60 секунд. Попробуй перезапустить воркфлоу."
+            exit 1
+          fi
 
       - name: Download DDNet Client
         run: |
@@ -63,20 +70,16 @@ jobs:
 
       - name: Spawn & Control Army
         env:
-          # Твоя ссылка на управление
           CONTROL_URL: "https://lively-king-450c.5yearsme5.workers.dev/"
           SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
         run: |
           cd ddnet_folder
-          
-          # Настройка графики
           export DISPLAY=:99
           Xvfb :99 -screen 0 1024x768x24 +extension GLX +render -noreset &
           sleep 3
           export LIBGL_ALWAYS_SOFTWARE=1
 
-          # Список человеческих ников
-          NAMES=("Ivan" "Pavel" "Sanya" "Maks" "Dimon" "Kot" "Legend" "TeePlayer" "Killer" "Sonic" "Pro" "Zora" "Panda" "Apple" "Mister")
+          NAMES=("Sonic" "Pavel" "Sanya" "Maks" "Dimon" "Killer" "Legend" "TeePlayer" "Panda" "Apple")
 
           for i in {1..4}; do
             RAND_NAME=${NAMES[$RANDOM % ${#NAMES[@]}]}
@@ -89,20 +92,20 @@ jobs:
           player_name "$HUMAN_NAME"
           connect "$SERVER_ADDR"
           EOF
-            if [ $i -eq 1 ]; then
-              ./DDNet -f "bot$i.cfg" > bot_debug.log 2>&1 &
-            else
-              ./DDNet -f "bot$i.cfg" > /dev/null 2>&1 &
-            fi
-            sleep 10
+            
+            # Запускаем бота
+            ./DDNet -f "bot$i.cfg" > bot_$i.log 2>&1 &
+            echo "Бот $HUMAN_NAME заходит..."
+            sleep 12 # Увеличили паузу для беспалевности
           done
 
-          echo "Боты запущены. Ожидаю команды..."
+          echo "Армия в игре. Ожидаю команды..."
           
           LAST_ID="0"
           while true; do
-            echo "--- STATUS ---"
-            tail -n 1 bot_debug.log || true
+            # Каждые 10 сек показываем лог, чтобы видеть причину бана если он будет
+            echo "--- DEBUG LOG ---"
+            tail -n 1 bot_1.log || echo "Нет логов"
             
             CMD_JSON=$(curl -s --max-time 3 "$CONTROL_URL" || echo '{"id":"0"}')
             ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
