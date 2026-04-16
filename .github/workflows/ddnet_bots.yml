@@ -25,39 +25,47 @@ jobs:
       
       - name: Connect to Residential VPN
         run: |
-          # 1. Запоминаем старый IP (Гитхаба)
+          # 1. Запоминаем старый IP
           OLD_IP=$(curl -s --max-time 5 https://ifconfig.me || echo "unknown")
           echo "Старый IP (GitHub): $OLD_IP"
 
-          # 2. Качаем список серверов
+          # 2. Создаем файл учетных данных (многие сервера VPNGate требуют vpn/vpn)
+          echo -e "vpn\nvpn" > pass.txt
+
+          # 3. Качаем список серверов
           curl -s https://www.vpngate.net/api/iphone/ > vpn_list.csv
           
-          # 3. Выбираем случайный рабочий конфиг
+          # 4. Выбираем случайный рабочий конфиг (пропуская заголовки)
           RAW_CONFIG=$(grep -vE "^#|^\*" vpn_list.csv | awk -F',' '{print $15}' | grep -v "^$" | shuf -n 1 | tr -d '\r')
           echo "$RAW_CONFIG" | base64 --decode --ignore-garbage > client.ovpn
           
-          # 4. Принудительно добавляем маршрутизацию всего трафика через VPN
+          # Добавляем настройки для форсирования трафика и исправления DNS
           echo "redirect-gateway def1" >> client.ovpn
-          echo "dhcp-option DNS 8.8.8.8" >> client.ovpn
+          echo "auth-user-pass pass.txt" >> client.ovpn
+          echo "dev tun" >> client.ovpn
 
-          # 5. Запускаем OpenVPN
-          sudo openvpn --config client.ovpn --daemon --auth-nocache
-          
+          # 5. Запускаем OpenVPN с записью лога
+          sudo openvpn --config client.ovpn --daemon --log vpn.log
+
           echo "Ожидаем смену IP..."
           VPN_SUCCESS=false
-          for i in {1..20}; do
-            sleep 3
-            NEW_IP=$(curl -s --max-time 5 https://ifconfig.me || echo "waiting")
-            if [[ "$NEW_IP" != "$OLD_IP" && "$NEW_IP" != "waiting" && "$NEW_IP" != "unknown" ]]; then
-              echo "✅ VPN ВКЛЮЧЕН! Новый IP: $NEW_IP"
-              VPN_SUCCESS=true
-              break
+          for i in {1..15}; do
+            sleep 4
+            # Проверяем, появился ли сетевой интерфейс tun0
+            if ip addr show tun0 > /dev/null 2>&1; then
+              NEW_IP=$(curl -s --max-time 5 https://ifconfig.me || echo "checking")
+              if [[ "$NEW_IP" != "$OLD_IP" && "$NEW_IP" != "checking" ]]; then
+                echo "✅ VPN ПОДКЛЮЧЕН! Новый IP: $NEW_IP"
+                VPN_SUCCESS=true
+                break
+              fi
             fi
-            echo "Попытка $i: IP всё еще $NEW_IP..."
+            echo "Попытка $i: Ждем поднятия туннеля..."
           done
 
           if [ "$VPN_SUCCESS" = false ]; then
-            echo "❌ Не удалось сменить IP за 60 секунд. Попробуй перезапустить воркфлоу."
+            echo "❌ ОШИБКА ПОДКЛЮЧЕНИЯ. Лог OpenVPN:"
+            cat vpn.log
             exit 1
           fi
 
@@ -84,7 +92,6 @@ jobs:
           for i in {1..4}; do
             RAND_NAME=${NAMES[$RANDOM % ${#NAMES[@]}]}
             HUMAN_NAME="${RAND_NAME}_$((RANDOM % 999))"
-            
             cat << EOF > "bot$i.cfg"
           cl_show_welcome 0
           cl_motd_time 0
@@ -92,20 +99,14 @@ jobs:
           player_name "$HUMAN_NAME"
           connect "$SERVER_ADDR"
           EOF
-            
-            # Запускаем бота
             ./DDNet -f "bot$i.cfg" > bot_$i.log 2>&1 &
-            echo "Бот $HUMAN_NAME заходит..."
-            sleep 12 # Увеличили паузу для беспалевности
+            sleep 10
           done
 
-          echo "Армия в игре. Ожидаю команды..."
-          
           LAST_ID="0"
           while true; do
-            # Каждые 10 сек показываем лог, чтобы видеть причину бана если он будет
-            echo "--- DEBUG LOG ---"
-            tail -n 1 bot_1.log || echo "Нет логов"
+            # Вывод статуса коннекта в лог
+            tail -n 1 bot_1.log || true
             
             CMD_JSON=$(curl -s --max-time 3 "$CONTROL_URL" || echo '{"id":"0"}')
             ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
@@ -114,7 +115,6 @@ jobs:
               LAST_ID=$ID
               TYPE=$(echo "$CMD_JSON" | jq -r '.type')
               VAL=$(echo "$CMD_JSON" | jq -r '.value')
-              
               WIDS=$(xdotool search --class "DDNet")
               for WID in $WIDS; do
                 if [ "$TYPE" == "chat" ]; then
