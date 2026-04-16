@@ -1,4 +1,4 @@
-name: DDNet Bot Army Official Control
+name: DDNet Bot Army RESIDENTIAL
 
 on: 
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       server_ip:
         description: 'IP:PORT сервера DDNet'
         required: true
-        default: '213.171.25.11:8309'
+        default: '87.120.186.242:8303'
 
 jobs:
   spawn-bots:
@@ -21,8 +21,34 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3 libgl1-mesa-dri
+          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3 libgl1-mesa-dri openvpn
       
+      - name: Connect to Residential VPN (VPNGate)
+        run: |
+          # Качаем список волонтерских серверов
+          curl -s https://www.vpngate.net/api/iphone/ > vpn_list.csv
+          
+          # Выбираем случайную строку (сервер), где есть OpenVPN конфиг
+          # Мы берем случайный сервер, чтобы 20 машин не сели на один и тот же
+          RAND_LINE=$(grep "OpenVPN_ConfigData_Base64" vpn_list.csv | shuf -n 1)
+          
+          # Извлекаем конфиг и декодируем его
+          echo "$RAND_LINE" | cut -d',' -f15 | base64 -d > client.ovpn
+          
+          # Запускаем OpenVPN в фоне
+          sudo openvpn --config client.ovpn --daemon
+          
+          # Ждем до 20 секунд, пока поднимется интерфейс tun0
+          echo "Ожидание подключения к волонтерскому IP..."
+          for i in {1..20}; do
+            if ip addr show tun0 > /dev/null 2>&1; then
+              echo "VPN Подключен!"
+              curl -s https://ifconfig.me
+              break
+            fi
+            sleep 2
+          done
+
       - name: Download DDNet Client
         run: |
           LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
@@ -36,44 +62,35 @@ jobs:
           SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
         run: |
           cd ddnet_folder
-          
-          # Запуск виртуального экрана
           export DISPLAY=:99
           Xvfb :99 -screen 0 1024x768x24 +extension GLX +render -noreset &
           sleep 3
           export LIBGL_ALWAYS_SOFTWARE=1
 
-          # Настройка ботов
-          SKINS=("default" "bluekitty" "cammostripes" "redbopp" "bluestripe")
+          # Имена без слова "Bot" - это важно!
+          NAMES=("Player" "Guest" "Zonker" "Tee" "Mee" "Panda" "Koala" "Fly" "Dash" "Jump")
+
           for i in {1..4}; do
-            RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
+            RAND_NAME=${NAMES[$RANDOM % ${#NAMES[@]}]}
             cat << EOF > "bot$i.cfg"
           cl_show_welcome 0
           cl_motd_time 0
           cl_auto_join_team 1
-          player_name "Bot_${{ matrix.instance }}_$i"
-          player_skin "$RAND_SKIN"
+          player_name "${RAND_NAME}_$((RANDOM % 9999))"
           connect "$SERVER_ADDR"
           EOF
-            # Запускаем и пишем лог первого бота в файл для отладки
-            if [ $i -eq 1 ]; then
-              ./DDNet -f "bot$i.cfg" > bot_debug.log 2>&1 &
-            else
-              ./DDNet -f "bot$i.cfg" > /dev/null 2>&1 &
-            fi
-            sleep 2
+            ./DDNet -f "bot$i.cfg" > bot_$i.log 2>&1 &
+            sleep 10
           done
 
-          echo "Боты запущены на $SERVER_ADDR"
+          echo "Армия заведена через волонтерский VPN."
           
           LAST_ID="0"
           while true; do
-            # ВЫВОДИМ ПОСЛЕДНИЕ 3 СТРОКИ ЛОГА ИГРЫ (чтобы ты видел, что происходит)
-            echo "--- LOG DEBUG ---"
-            tail -n 3 bot_debug.log || true
-            echo "-----------------"
-
-            CMD_JSON=$(curl -s --max-time 3 "$CONTROL_URL" || echo '{"id":"0"}')
+            # Если VPN упал - лог это покажет
+            tail -n 1 bot_1.log || true
+            
+            CMD_JSON=$(curl -s --max-time 5 "$CONTROL_URL" || echo '{"id":"0"}')
             ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
             
             if [ "$ID" != "$LAST_ID" ] && [ "$ID" != "0" ]; then
@@ -85,14 +102,14 @@ jobs:
               for WID in $WIDS; do
                 if [ "$TYPE" == "chat" ]; then
                   xdotool key --window $WID t
-                  sleep 0.1
+                  sleep 0.2
                   xdotool type --window $WID "$VAL"
-                  sleep 0.1
+                  sleep 0.2
                   xdotool key --window $WID Return
                 elif [ "$TYPE" == "key" ]; then
                   xdotool key --window $WID "$VAL"
                 fi
               done
             fi
-            sleep 5
+            sleep 3
           done
