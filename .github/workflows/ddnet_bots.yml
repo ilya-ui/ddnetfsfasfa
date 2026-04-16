@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        instance:[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     
     runs-on: ubuntu-latest
     
@@ -28,21 +28,20 @@ jobs:
           # Качаем свежий список волонтерских серверов
           curl -s https://www.vpngate.net/api/iphone/ > vpn_list.csv
           
-          # Извлекаем случайный рабочий конфиг (15-я колонка в CSV)
-          # Очищаем от мусора и декодируем
-          RAW_CONFIG=$(awk -F',' '/OpenVPN_ConfigData_Base64/{print $15}' vpn_list.csv | shuf -n 1 | tr -d '\r')
+          # 1. Удаляем строки начинающиеся с # и * (заголовки)
+          # 2. Берем 15-ю колонку
+          # 3. Удаляем пустые строки
+          # 4. Выбираем 1 случайный сервер
+          # 5. Удаляем невидимые символы \r
+          RAW_CONFIG=$(grep -vE "^#|^\*" vpn_list.csv | awk -F',' '{print $15}' | grep -v "^$" | shuf -n 1 | tr -d '\r')
           
-          if [ -z "$RAW_CONFIG" ]; then
-            echo "Не удалось получить конфиг, пробую еще раз..."
-            RAW_CONFIG=$(awk -F',' '/OpenVPN_ConfigData_Base64/{print $15}' vpn_list.csv | shuf -n 1 | tr -d '\r')
-          fi
-          
-          echo "$RAW_CONFIG" | base64 -d > client.ovpn
+          # Декодируем с флагом --ignore-garbage (игнорирует любой мусор)
+          echo "$RAW_CONFIG" | base64 --decode --ignore-garbage > client.ovpn
           
           # Запускаем OpenVPN
           sudo openvpn --config client.ovpn --daemon --auth-nocache
           
-          echo "Ожидаем подключение (туннель tun0)..."
+          echo "Ожидаем подключение к волонтерскому серверу (туннель tun0)..."
           for i in {1..15}; do
             if ip addr show tun0 > /dev/null 2>&1; then
               echo "VPN Подключен!"
@@ -118,7 +117,7 @@ jobs:
               
               WIDS=$(xdotool search --class "DDNet")
               for WID in $WIDS; do
-                if [ "$TYPE" == "chat" ]; then
+                if[ "$TYPE" == "chat" ]; then
                   xdotool key --window $WID t
                   sleep 0.2
                   xdotool type --window $WID "$VAL"
