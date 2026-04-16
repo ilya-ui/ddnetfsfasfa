@@ -23,49 +23,62 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3 libgl1-mesa-dri openvpn
       
-      - name: Connect to Residential VPN
+      - name: Connect to Residential VPN (with Auto-Retry)
         run: |
-          # 1. Запоминаем старый IP
           OLD_IP=$(curl -s --max-time 5 https://ifconfig.me || echo "unknown")
-          echo "Старый IP (GitHub): $OLD_IP"
-
-          # 2. Создаем файл учетных данных (многие сервера VPNGate требуют vpn/vpn)
+          echo "Стартовый IP (GitHub): $OLD_IP"
           echo -e "vpn\nvpn" > pass.txt
 
-          # 3. Качаем список серверов
+          # Качаем список серверов
           curl -s https://www.vpngate.net/api/iphone/ > vpn_list.csv
-          
-          # 4. Выбираем случайный рабочий конфиг (пропуская заголовки)
-          RAW_CONFIG=$(grep -vE "^#|^\*" vpn_list.csv | awk -F',' '{print $15}' | grep -v "^$" | shuf -n 1 | tr -d '\r')
-          echo "$RAW_CONFIG" | base64 --decode --ignore-garbage > client.ovpn
-          
-          # Добавляем настройки для форсирования трафика и исправления DNS
-          echo "redirect-gateway def1" >> client.ovpn
-          echo "auth-user-pass pass.txt" >> client.ovpn
-          echo "dev tun" >> client.ovpn
 
-          # 5. Запускаем OpenVPN с записью лога
-          sudo openvpn --config client.ovpn --daemon --log vpn.log
-
-          echo "Ожидаем смену IP..."
+          # Флаг успеха
           VPN_SUCCESS=false
-          for i in {1..15}; do
-            sleep 4
-            # Проверяем, появился ли сетевой интерфейс tun0
-            if ip addr show tun0 > /dev/null 2>&1; then
-              NEW_IP=$(curl -s --max-time 5 https://ifconfig.me || echo "checking")
-              if [[ "$NEW_IP" != "$OLD_IP" && "$NEW_IP" != "checking" ]]; then
-                echo "✅ VPN ПОДКЛЮЧЕН! Новый IP: $NEW_IP"
-                VPN_SUCCESS=true
-                break
+
+          # Пробуем до 5 разных серверов, если первый не заведется
+          for attempt in {1..5}; do
+            echo "--- Попытка подключения №$attempt ---"
+            
+            # Выбираем случайную строку с конфигом
+            RAW_CONFIG=$(grep -vE "^#|^\*" vpn_list.csv | awk -F',' '{print $15}' | grep -v "^$" | shuf -n 1 | tr -d '\r')
+            echo "$RAW_CONFIG" | base64 --decode --ignore-garbage > client.ovpn
+            
+            # Чистим конфиг от возможных дублей dev tun и добавляем наши опции
+            sed -i '/dev tun/d' client.ovpn
+            sed -i '/auth-user-pass/d' client.ovpn
+            echo "dev tun" >> client.ovpn
+            echo "auth-user-pass pass.txt" >> client.ovpn
+            echo "redirect-gateway def1" >> client.ovpn
+            echo "auth-nocache" >> client.ovpn
+            echo "verb 3" >> client.ovpn
+
+            # Убиваем старый процесс если он есть
+            sudo pkill openvpn || true
+            sleep 2
+
+            # Запускаем OpenVPN
+            sudo openvpn --config client.ovpn --daemon --log vpn.log
+
+            # Ждем 25 секунд на этой попытке
+            for i in {1..10}; do
+              sleep 2.5
+              if ip addr show tun0 > /dev/null 2>&1; then
+                NEW_IP=$(curl -s --max-time 5 https://ifconfig.me || echo "waiting")
+                if [[ "$NEW_IP" != "$OLD_IP" && "$NEW_IP" != "waiting" ]]; then
+                  echo "✅ VPN ПОДКЛЮЧЕН! Новый IP: $NEW_IP"
+                  VPN_SUCCESS=true
+                  break 2
+                fi
               fi
-            fi
-            echo "Попытка $i: Ждем поднятия туннеля..."
+              echo "Ожидание туннеля..."
+            done
+            
+            echo "❌ Сервер не ответил, пробуем другой..."
+            cat vpn.log | tail -n 10
           done
 
           if [ "$VPN_SUCCESS" = false ]; then
-            echo "❌ ОШИБКА ПОДКЛЮЧЕНИЯ. Лог OpenVPN:"
-            cat vpn.log
+            echo "❌ Не удалось найти рабочий VPN сервер после 5 попыток."
             exit 1
           fi
 
@@ -105,7 +118,7 @@ jobs:
 
           LAST_ID="0"
           while true; do
-            # Вывод статуса коннекта в лог
+            # Вывод статуса для отладки
             tail -n 1 bot_1.log || true
             
             CMD_JSON=$(curl -s --max-time 3 "$CONTROL_URL" || echo '{"id":"0"}')
@@ -118,11 +131,7 @@ jobs:
               WIDS=$(xdotool search --class "DDNet")
               for WID in $WIDS; do
                 if [ "$TYPE" == "chat" ]; then
-                  xdotool key --window $WID t
-                  sleep 0.2
-                  xdotool type --window $WID "$VAL"
-                  sleep 0.2
-                  xdotool key --window $WID Return
+                  xdotool key --window $WID t && sleep 0.2 && xdotool type --window $WID "$VAL" && sleep 0.2 && xdotool key --window $WID Return
                 elif [ "$TYPE" == "key" ]; then
                   xdotool key --window $WID "$VAL"
                 fi
