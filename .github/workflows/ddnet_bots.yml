@@ -1,4 +1,4 @@
-name: DDNet Fast Proxy Army
+name: DDNet TOR-SOCKS UDP Army FIXED
 
 on: 
   workflow_dispatch:
@@ -21,7 +21,6 @@ jobs:
       - name: Install All Dependencies
         run: |
           sudo apt-get update -y
-          # Добавлены libnotify4, libxss1 и libvulkan1
           sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1-mesa-dri proxychains4 tor netcat-openbsd libnotify4 libxss1 libvulkan1
 
       - name: Setup TOR & Proxychains
@@ -34,22 +33,25 @@ jobs:
 
       - name: Find Proxy Fast
         run: |
-          # Быстрый скрапинг без лишних логов
+          # Скрапим прокси через ТОР
           curl --socks5-hostname 127.0.0.1:9050 -sL "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=5000&country=all&simplified=true" | tr -d '\r' > socks5_list.txt
           
           FOUND=false
-          # Пробуем только первые 15 прокси для скорости
-          for i in {1..15}; do
+          for i in {1..20}; do
             PROXY=$(shuf -n 1 socks5_list.txt)
             [ -z "$PROXY" ] && continue
             IP=$(echo $PROXY | cut -d':' -f1)
             PORT=$(echo $PROXY | cut -d':' -f2)
             if timeout 2s nc -z $IP $PORT; then
               echo "socks5 $IP $PORT" >> proxychains.conf
+              echo "✅ Нашел прокси: $IP:$PORT"
               FOUND=true && break
             fi
           done
-          [ "$FOUND" = false ] && echo "socks5 127.0.0.1 9050" >> proxychains.conf
+          if [ "$FOUND" = "false" ]; then
+            echo "socks5 127.0.0.1 9050" >> proxychains.conf
+          fi
+          true # Чтобы шаг всегда завершался успешно
 
       - name: Download & Run Fast
         env:
@@ -57,30 +59,31 @@ jobs:
           SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
         run: |
           set +e
-          # Качаем и распаковываем мгновенно
           mkdir -p ddnet_folder
+          # Качаем напрямую в tar для скорости
           wget -qO- https://ddnet.org/downloads/DDNet-18.1-linux_x86_64.tar.xz | tar -xJ --strip-components=1 -C ddnet_folder
           chmod +x ddnet_folder/DDNet
           
           cd ddnet_folder
+          # Виртуальный экран
           Xvfb :99 -screen 0 640x480x24 +extension GLX -noreset &
           export DISPLAY=:99
           
-          # Настройка конфига
+          # Конфиг
           NAME="Bot_${{ matrix.instance }}_$((RANDOM % 999))"
           echo "player_name \"$NAME\"" > bot.cfg
           echo "snd_enable 0" >> bot.cfg
           echo "gfx_screen_width 640" >> bot.cfg
           echo "gfx_screen_height 480" >> bot.cfg
 
-          # МГНОВЕННЫЙ ЗАПУСК (Основа + 2 дамми)
+          # Запуск (Основа + 2 дамми)
           proxychains4 -f ../proxychains.conf ./DDNet -f bot.cfg "connect $SERVER_ADDR; cl_dummy_name ${NAME}_d1; +dummy_connect; cl_dummy_name ${NAME}_d2; +dummy_connect" > ../ddnet.log 2>&1 &
           
-          echo "Боты запущены. Слушаю Worker..."
+          echo "Армия запущена. Контроль через Worker..."
           
           LAST_ID="0"
           while true; do
-            # Короткий таймаут для curl, чтобы цикл крутился быстрее
+            # Опрос воркера
             CMD_JSON=$(curl -s --max-time 2 "$CONTROL_URL" || echo '{"id":"0"}')
             ID=$(echo "$CMD_JSON" | jq -r '.id // 0' 2>/dev/null)
             
@@ -99,7 +102,7 @@ jobs:
               done
             fi
             
-            # Проверка процесса раз в 4 секунды
+            # Если процесс упал - респ
             pgrep -x "DDNet" > /dev/null || proxychains4 -f ../proxychains.conf ./DDNet -f bot.cfg "connect $SERVER_ADDR; +dummy_connect" > /dev/null 2>&1 &
             sleep 2
           done
