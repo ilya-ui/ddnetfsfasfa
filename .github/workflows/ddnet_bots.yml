@@ -1,4 +1,4 @@
-name: DDNet TOR-SOCKS UDP Army
+name: DDNet TOR-SOCKS UDP Army FIXED
 
 on: 
   workflow_dispatch:
@@ -21,53 +21,52 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1-mesa-dri proxychains4 tor
+          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1-mesa-dri proxychains4 tor netcat-openbsd
 
       - name: Setup TOR & Proxychains
         run: |
-          # Запускаем TOR (он нужен для анонимного скачивания списков)
           sudo systemctl start tor
-          
-          # Настраиваем proxychains на использование SOCKS5
-          # Мы будем динамически подставлять рабочий прокси в конфиг
+          # Базовая настройка proxychains
           echo "strict_chain" > proxychains.conf
           echo "proxy_dns" >> proxychains.conf
           echo "remote_dns_res" >> proxychains.conf
-          echo "tcp_read_time_out 15000" >> proxychains.conf
-          echo "tcp_connect_time_out 8000" >> proxychains.conf
           echo "[ProxyList]" >> proxychains.conf
 
       - name: Find Working UDP Proxy
         run: |
           echo "Скачиваем список SOCKS5 через TOR..."
-          # Качаем список прокси через TOR, чтобы гитхаб не забанили
-          curl --socks5-hostname 127.0.0.1:9050 -L "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=10000&country=all&simplified=true" -o socks5_list.txt
+          # Скачиваем и ОЧИЩАЕМ список от \r
+          curl --socks5-hostname 127.0.0.1:9050 -L "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=10000&country=all&simplified=true" | tr -d '\r' > socks5_list.txt
           
-          # Берем случайный прокси для этой машины
-          # В SOCKS5 UDP работает через команду UDP ASSOCIATE
-          for i in {1..20}; do
+          # Берем случайный прокси и проверяем его
+          FOUND=false
+          for i in {1..30}; do
             PROXY=$(shuf -n 1 socks5_list.txt)
+            if [ -z "$PROXY" ]; then continue; fi
+            
             IP=$(echo $PROXY | cut -d':' -f1)
             PORT=$(echo $PROXY | cut -d':' -f2)
             
-            echo "socks5 $IP $PORT" >> proxychains.conf
             echo "Проверка прокси $IP:$PORT..."
-            
-            # Быстрая проверка связи (TCP)
-            if timeout 5s nc -z $IP $PORT; then
-              echo "✅ Прокси выбран: $IP:$PORT"
+            # Проверяем TCP коннект за 3 секунды
+            if timeout 3s nc -zv $IP $PORT; then
+              echo "socks5 $IP $PORT" >> proxychains.conf
+              echo "✅ Выбран рабочий прокси: $IP:$PORT"
+              FOUND=true
               break
-            else
-              # Если не подошел, удаляем последнюю строку и пробуем другой
-              sed -i '$d' proxychains.conf
             fi
           done
+          
+          if [ "$FOUND" = false ]; then
+            echo "❌ Рабочих прокси не найдено, используем прямой коннект как запасной"
+            echo "socks5 127.0.0.1 9050" >> proxychains.conf # Хотя бы тор
+          fi
 
       - name: Download DDNet Client
         run: |
+          mkdir -p ddnet_folder
           wget -q https://ddnet.org/downloads/DDNet-18.1-linux_x86_64.tar.xz
-          tar -xf DDNet-18.1-linux_x86_64.tar.xz
-          mv DDNet-* ddnet_folder
+          tar -xf DDNet-18.1-linux_x86_64.tar.xz --strip-components=1 -C ddnet_folder
 
       - name: Spawn Official Bots
         env:
@@ -79,19 +78,22 @@ jobs:
           Xvfb :99 -screen 0 640x480x24 +extension GLX +render -noreset &
           sleep 3
           
-          # Настройка бота
+          # Создаем конфиг
           NAME="Bot_${{ matrix.instance }}_$((RANDOM % 999))"
-          echo "player_name \"$NAME\"" > bot.cfg
-          echo "snd_enable 0" >> bot.cfg
-          echo "cl_shownames 0" >> bot.cfg
+          cat << EOF > bot.cfg
+          player_name "$NAME"
+          snd_enable 0
+          gfx_screen_width 640
+          gfx_screen_height 480
+          cl_shownames 0
+          EOF
 
-          # ЗАПУСК через Proxychains (UDP трафик пойдет через SOCKS5)
-          # Мы запускаем 4 бота (основа + 3 dummy) на один прокси
-          proxychains4 -f ../proxychains.conf ./DDNet -f bot.cfg "connect $SERVER_ADDR; cl_dummy_name ${NAME}_d1; +dummy_connect; cl_dummy_name ${NAME}_d2; +dummy_connect" > bot.log 2>&1 &
+          # ЗАПУСК (Основа + 3 дамми)
+          # Используем путь к конфигу proxychains уровнем выше
+          proxychains4 -f ../proxychains.conf ./DDNet -f bot.cfg "connect $SERVER_ADDR; cl_dummy_name ${NAME}_d1; +dummy_connect; cl_dummy_name ${NAME}_d2; +dummy_connect; cl_dummy_name ${NAME}_d3; +dummy_connect" > ../bot.log 2>&1 &
           
-          echo "Бот запущен через прокси. Ожидание команд из Worker..."
+          echo "Боты запущены. Ожидание команд..."
           
-          # Цикл управления (как в твоем скрипте)
           LAST_ID="0"
           while true; do
             CMD_JSON=$(curl -s --max-time 3 "$CONTROL_URL" || echo '{"id":"0"}')
@@ -112,9 +114,8 @@ jobs:
               done
             fi
             sleep 4
-            # Если бот вылетел - перезапускаем (опционально)
             if ! pgrep -x "DDNet" > /dev/null; then
-               echo "Бот упал, перезапуск..."
-               proxychains4 -f ../proxychains.conf ./DDNet -f bot.cfg "connect $SERVER_ADDR; +dummy_connect" &
+               echo "Перезапуск бота..."
+               proxychains4 -f ../proxychains.conf ./DDNet -f bot.cfg "connect $SERVER_ADDR; +dummy_connect" > /dev/null 2>&1 &
             fi
           done
