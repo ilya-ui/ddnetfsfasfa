@@ -14,96 +14,133 @@ jobs:
       fail-fast: false
       matrix:
         # 20 машин по 4 бота = 80 ботов
-        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        instance:[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     
     runs-on: ubuntu-latest
     
     steps:
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3 libgl1-mesa-dri
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Нужна современная версия (для встроенного fetch)
+          
+      - name: Install Teeworlds Library
+        # Устанавливаем библиотеку для работы с протоколом игры
+        run: npm install teeworlds
       
-      - name: Download DDNet Client
-        run: |
-          LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
-          curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
-          tar -xf ddnet.tar.xz
-          mv DDNet-* ddnet_folder
-
       - name: Spawn & Control Army
         env:
-          # Твоя ссылка на Cloudflare Worker или Alwaysdata
           CONTROL_URL: "https://lively-king-450c.5yearsme5.workers.dev/"
           SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
+          INSTANCE: "${{ matrix.instance }}"
         run: |
-          cd ddnet_folder
-          
-          # Настройка виртуального экрана
-          export DISPLAY=:99
-          Xvfb :99 -screen 0 1024x768x24 +extension GLX +render -noreset &
-          sleep 3
-          export LIBGL_ALWAYS_SOFTWARE=1
+          # Создаем JS-скрипт логики ботов
+          cat << 'EOF' > bots.js
+          const teeworlds = require('teeworlds');
 
-          # --- УМНАЯ ЗАДЕРЖКА ВХОДА ---
-          # Чтобы не все 20 машин зашли в одну секунду (за это банят)
-          # Каждая машина ждет (номер_инстанса * 10) секунд
-          WAIT_TIME=$(( (${{ matrix.instance }} - 1) * 10 ))
-          echo "Машина ${{ matrix.instance }} ждет $WAIT_TIME секунд перед стартом..."
-          sleep $WAIT_TIME
+          const CONTROL_URL = process.env.CONTROL_URL;
+          const SERVER_ADDR = process.env.SERVER_ADDR;
+          const INSTANCE = parseInt(process.env.INSTANCE || "1", 10);
 
-          # Список нормальных имен
-          NAMES=("Sanya" "Maks" "Pavel" "Dimon" "Killer" "Legend" "ProPlayer" "Tee" "Sonic" "Apple" "Zora" "Panda")
+          let [ip, port] = SERVER_ADDR.split(':');
+          port = parseInt(port || "8303", 10);
 
-          for i in {1..4}; do
-            RAND_NAME=${NAMES[$RANDOM % ${#NAMES[@]}]}
-            # Имя типа Sanya_482
-            HUMAN_NAME="${RAND_NAME}_$((RANDOM % 999))"
-            
-            cat << EOF > "bot$i.cfg"
-          cl_show_welcome 0
-          cl_motd_time 0
-          cl_auto_join_team 1
-          player_name "$HUMAN_NAME"
-          connect "$SERVER_ADDR"
+          const NAMES =["Sanya", "Maks", "Pavel", "Dimon", "Killer", "Legend", "ProPlayer", "Tee", "Sonic", "Apple", "Zora", "Panda"];
+
+          const bots =[];
+
+          async function startBots() {
+              // --- УМНАЯ ЗАДЕРЖКА ВХОДА ---
+              const waitTime = (INSTANCE - 1) * 10;
+              console.log(`Машина ${INSTANCE} ждет ${waitTime} секунд перед стартом...`);
+              await new Promise(r => setTimeout(r, waitTime * 1000));
+
+              for (let i = 1; i <= 4; i++) {
+                  const randName = NAMES[Math.floor(Math.random() * NAMES.length)];
+                  const humanName = `${randName}_${Math.floor(Math.random() * 999)}`;
+                  
+                  console.log(`[+] Бот ${humanName} заходит...`);
+                  
+                  // Инициализация headless-бота
+                  let client = new teeworlds.Client(ip, port, humanName);
+                  client.connect();
+                  
+                  client.on("connected", () => {
+                      console.log(`[!] ${humanName} успешно подключился!`);
+                      // 0 = обычная игра (красная команда). Эмуляция cl_auto_join_team 1
+                      client.game.SetTeam(0); 
+                  });
+
+                  client.on("disconnect", (reason) => {
+                      console.log(`[-] ${humanName} отключен: ${reason}`);
+                  });
+
+                  bots.push(client);
+                  
+                  // Пауза 5 секунд между ботами внутри одной машины
+                  await new Promise(r => setTimeout(r, 5000));
+              }
+              
+              console.log("Боты запущены. Ожидание команд...");
+              pollCommands();
+          }
+
+          let lastId = "0";
+
+          async function pollCommands() {
+              while (true) {
+                  try {
+                      // Опрашиваем API
+                      const res = await fetch(CONTROL_URL, { signal: AbortSignal.timeout(3000) });
+                      const data = await res.json();
+                      const id = data.id || "0";
+                      
+                      if (id !== "0" && id !== lastId) {
+                          lastId = id;
+                          const type = data.type;
+                          const val = data.value;
+                          
+                          console.log(`Команда принята: ${type} -> ${val}`);
+                          
+                          for (let bot of bots) {
+                              if (!bot.game || !bot.movement) continue; // Бот еще не в игре
+                              
+                              if (type === "chat") {
+                                  bot.game.Say(val);
+                              } else if (type === "key") {
+                                  // Перехватываем управление движением вместо клавиатурных событий
+                                  const key = val.toLowerCase();
+                                  
+                                  if (key === "a" || key === "left") bot.movement.RunLeft();
+                                  else if (key === "d" || key === "right") bot.movement.RunRight();
+                                  else if (key === "stop") bot.movement.RunStop();
+                                  else if (key === "space" || key === "jump") {
+                                      bot.movement.Jump();
+                                      // Автоматически отпускаем прыжок через 100мс
+                                      setTimeout(() => bot.movement.Jump(false), 100);
+                                  }
+                                  else if (key === "fire" || key === "mouse1" || key === "click") {
+                                      bot.movement.Fire();
+                                  }
+                                  else if (key === "hook" || key === "mouse2") {
+                                      bot.movement.Hook();
+                                      // Автоматически отпускаем хук (можно убрать, если нужен вечный хук)
+                                      setTimeout(() => bot.movement.Hook(false), 300);
+                                  }
+                              }
+                          }
+                      }
+                  } catch (e) {
+                      // Игнорируем сетевые ошибки, чтобы не спамить в логи
+                  }
+                  
+                  // Ждем перед следующим опросом (как sleep 4)
+                  await new Promise(r => setTimeout(r, 4000));
+              }
+          }
+
+          startBots();
           EOF
-            # Запуск официального клиента
-            ./DDNet -f "bot$i.cfg" > bot_$i.log 2>&1 &
-            echo "[+] Бот $HUMAN_NAME заходит..."
-            # Пауза 5 секунд между ботами внутри одной машины
-            sleep 5
-          done
-
-          echo "Боты запущены. Ожидание команд..."
           
-          LAST_ID="0"
-          while true; do
-            # Вывод последней строки лога первого бота для проверки статуса
-            tail -n 1 bot_1.log || true
-            
-            # Опрос команд
-            CMD_JSON=$(curl -s --max-time 3 "$CONTROL_URL" || echo '{"id":"0"}')
-            ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
-            
-            if [ "$ID" != "$LAST_ID" ] && [ "$ID" != "0" ]; then
-              LAST_ID=$ID
-              TYPE=$(echo "$CMD_JSON" | jq -r '.type')
-              VAL=$(echo "$CMD_JSON" | jq -r '.value')
-              
-              echo "Команда принята: $TYPE -> $VAL"
-              
-              WIDS=$(xdotool search --class "DDNet")
-              for WID in $WIDS; do
-                if [ "$TYPE" == "chat" ]; then
-                  xdotool key --window $WID t
-                  sleep 0.2
-                  xdotool type --window $WID "$VAL"
-                  sleep 0.2
-                  xdotool key --window $WID Return
-                elif [ "$TYPE" == "key" ]; then
-                  xdotool key --window $WID "$VAL"
-                fi
-              done
-            fi
-            sleep 4
-          done
+          # Запускаем созданный скрипт
+          node bots.js
