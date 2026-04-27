@@ -13,7 +13,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Теперь здесь есть пробел после двоеточия
         instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     
     runs-on: ubuntu-latest
@@ -50,38 +49,43 @@ jobs:
           const bots = [];
 
           async function startBots() {
-              const waitTime = (INSTANCE - 1) * 10;
-              console.log(`Машина ${INSTANCE} ждет ${waitTime} секунд перед стартом...`);
-              await new Promise(r => setTimeout(r, waitTime * 1000));
+              // Каждая машина ждет свою очередь, чтобы не спамить в 1 секунду всеми 80 ботами
+              const machineWait = (INSTANCE - 1) * 5; 
+              console.log(`Машина ${INSTANCE} ждет ${machineWait} сек...`);
+              await new Promise(r => setTimeout(r, machineWait * 1000));
 
               for (let i = 1; i <= 4; i++) {
                   const randName = NAMES[Math.floor(Math.random() * NAMES.length)];
                   const humanName = `${randName}_${Math.floor(Math.random() * 999)}`;
                   
-                  console.log(`[+] Бот ${humanName} заходит...`);
-                  
                   try {
-                      let client = new teeworlds.Client(ip, port, humanName);
+                      // Подменяем версию на DDNet 18.2.3 (актуальная на данный момент)
+                      // Это заставляет сервер думать, что зашел официальный клиент
+                      let client = new teeworlds.Client(ip, port, humanName, {
+                          version: "DDNet 18.2.3",
+                          client_version: 18023 
+                      });
+
                       client.connect();
                       
                       client.on("connected", () => {
-                          console.log(`[!] ${humanName} успешно подключился!`);
+                          console.log(`[+] ${humanName} зашел!`);
                           client.game.SetTeam(0); 
                       });
 
                       client.on("disconnect", (reason) => {
-                          console.log(`[-] ${humanName} отключен: ${reason}`);
+                          console.log(`[-] ${humanName} вылетел: ${reason}`);
                       });
 
                       bots.push(client);
                   } catch (e) {
-                      console.error(`Ошибка при создании бота ${humanName}:`, e);
+                      console.error(`Ошибка бота:`, e.message);
                   }
                   
-                  await new Promise(r => setTimeout(r, 5000));
+                  // Ускорили вход: теперь боты внутри машины заходят через 1 секунду вместо 5
+                  await new Promise(r => setTimeout(r, 1200));
               }
               
-              console.log("Боты запущены. Ожидание команд...");
               pollCommands();
           }
 
@@ -99,7 +103,7 @@ jobs:
                           const type = data.type;
                           const val = data.value;
                           
-                          console.log(`Команда принята: ${type} -> ${val}`);
+                          console.log(`Команда: ${type}(${val})`);
                           
                           for (let bot of bots) {
                               if (!bot.game || !bot.movement) continue;
@@ -108,14 +112,10 @@ jobs:
                                   bot.game.Say(val);
                               } else if (type === "key") {
                                   const key = String(val).toLowerCase();
-                                  
-                                  if (key === "a" || key === "left") {
-                                      bot.movement.RunLeft();
-                                  } else if (key === "d" || key === "right") {
-                                      bot.movement.RunRight();
-                                  } else if (key === "stop" || key === "s") {
-                                      bot.movement.RunStop();
-                                  } else if (key === "space" || key === "jump" || key === "w") {
+                                  if (key === "a" || key === "left") bot.movement.RunLeft();
+                                  else if (key === "d" || key === "right") bot.movement.RunRight();
+                                  else if (key === "stop" || key === "s") bot.movement.RunStop();
+                                  else if (key === "space" || key === "jump" || key === "w") {
                                       bot.movement.Jump();
                                       setTimeout(() => bot.movement.Jump(false), 150);
                                   } else if (key === "fire" || key === "ctrl") {
@@ -123,15 +123,13 @@ jobs:
                                       setTimeout(() => bot.movement.Fire(false), 150);
                                   } else if (key === "hook" || key === "shift") {
                                       bot.movement.Hook();
-                                      setTimeout(() => bot.movement.Hook(false), 500);
+                                      setTimeout(() => bot.movement.Hook(false), 600);
                                   }
                               }
                           }
                       }
-                  } catch (e) {
-                      // Ошибки сети игнорируем
-                  }
-                  await new Promise(r => setTimeout(r, 4000));
+                  } catch (e) {}
+                  await new Promise(r => setTimeout(r, 3500));
               }
           }
 
