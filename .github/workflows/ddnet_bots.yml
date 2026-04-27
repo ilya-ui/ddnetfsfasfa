@@ -13,8 +13,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 20 машин по 4 бота = 80 ботов
-        instance:[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        # Теперь здесь есть пробел после двоеточия
+        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     
     runs-on: ubuntu-latest
     
@@ -22,11 +22,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20' # Нужна современная версия (для встроенного fetch)
+          node-version: '20'
           
       - name: Install Teeworlds Library
-        # Устанавливаем библиотеку для работы с протоколом игры
-        run: npm install teeworlds
+        run: |
+          npm init -y
+          npm install teeworlds
       
       - name: Spawn & Control Army
         env:
@@ -34,7 +35,6 @@ jobs:
           SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
           INSTANCE: "${{ matrix.instance }}"
         run: |
-          # Создаем JS-скрипт логики ботов
           cat << 'EOF' > bots.js
           const teeworlds = require('teeworlds');
 
@@ -45,12 +45,11 @@ jobs:
           let [ip, port] = SERVER_ADDR.split(':');
           port = parseInt(port || "8303", 10);
 
-          const NAMES =["Sanya", "Maks", "Pavel", "Dimon", "Killer", "Legend", "ProPlayer", "Tee", "Sonic", "Apple", "Zora", "Panda"];
+          const NAMES = ["Sanya", "Maks", "Pavel", "Dimon", "Killer", "Legend", "ProPlayer", "Tee", "Sonic", "Apple", "Zora", "Panda"];
 
-          const bots =[];
+          const bots = [];
 
           async function startBots() {
-              // --- УМНАЯ ЗАДЕРЖКА ВХОДА ---
               const waitTime = (INSTANCE - 1) * 10;
               console.log(`Машина ${INSTANCE} ждет ${waitTime} секунд перед стартом...`);
               await new Promise(r => setTimeout(r, waitTime * 1000));
@@ -61,23 +60,24 @@ jobs:
                   
                   console.log(`[+] Бот ${humanName} заходит...`);
                   
-                  // Инициализация headless-бота
-                  let client = new teeworlds.Client(ip, port, humanName);
-                  client.connect();
-                  
-                  client.on("connected", () => {
-                      console.log(`[!] ${humanName} успешно подключился!`);
-                      // 0 = обычная игра (красная команда). Эмуляция cl_auto_join_team 1
-                      client.game.SetTeam(0); 
-                  });
+                  try {
+                      let client = new teeworlds.Client(ip, port, humanName);
+                      client.connect();
+                      
+                      client.on("connected", () => {
+                          console.log(`[!] ${humanName} успешно подключился!`);
+                          client.game.SetTeam(0); 
+                      });
 
-                  client.on("disconnect", (reason) => {
-                      console.log(`[-] ${humanName} отключен: ${reason}`);
-                  });
+                      client.on("disconnect", (reason) => {
+                          console.log(`[-] ${humanName} отключен: ${reason}`);
+                      });
 
-                  bots.push(client);
+                      bots.push(client);
+                  } catch (e) {
+                      console.error(`Ошибка при создании бота ${humanName}:`, e);
+                  }
                   
-                  // Пауза 5 секунд между ботами внутри одной машины
                   await new Promise(r => setTimeout(r, 5000));
               }
               
@@ -90,10 +90,9 @@ jobs:
           async function pollCommands() {
               while (true) {
                   try {
-                      // Опрашиваем API
                       const res = await fetch(CONTROL_URL, { signal: AbortSignal.timeout(3000) });
                       const data = await res.json();
-                      const id = data.id || "0";
+                      const id = String(data.id || "0");
                       
                       if (id !== "0" && id !== lastId) {
                           lastId = id;
@@ -103,38 +102,35 @@ jobs:
                           console.log(`Команда принята: ${type} -> ${val}`);
                           
                           for (let bot of bots) {
-                              if (!bot.game || !bot.movement) continue; // Бот еще не в игре
+                              if (!bot.game || !bot.movement) continue;
                               
                               if (type === "chat") {
                                   bot.game.Say(val);
                               } else if (type === "key") {
-                                  // Перехватываем управление движением вместо клавиатурных событий
-                                  const key = val.toLowerCase();
+                                  const key = String(val).toLowerCase();
                                   
-                                  if (key === "a" || key === "left") bot.movement.RunLeft();
-                                  else if (key === "d" || key === "right") bot.movement.RunRight();
-                                  else if (key === "stop") bot.movement.RunStop();
-                                  else if (key === "space" || key === "jump") {
+                                  if (key === "a" || key === "left") {
+                                      bot.movement.RunLeft();
+                                  } else if (key === "d" || key === "right") {
+                                      bot.movement.RunRight();
+                                  } else if (key === "stop" || key === "s") {
+                                      bot.movement.RunStop();
+                                  } else if (key === "space" || key === "jump" || key === "w") {
                                       bot.movement.Jump();
-                                      // Автоматически отпускаем прыжок через 100мс
-                                      setTimeout(() => bot.movement.Jump(false), 100);
-                                  }
-                                  else if (key === "fire" || key === "mouse1" || key === "click") {
+                                      setTimeout(() => bot.movement.Jump(false), 150);
+                                  } else if (key === "fire" || key === "ctrl") {
                                       bot.movement.Fire();
-                                  }
-                                  else if (key === "hook" || key === "mouse2") {
+                                      setTimeout(() => bot.movement.Fire(false), 150);
+                                  } else if (key === "hook" || key === "shift") {
                                       bot.movement.Hook();
-                                      // Автоматически отпускаем хук (можно убрать, если нужен вечный хук)
-                                      setTimeout(() => bot.movement.Hook(false), 300);
+                                      setTimeout(() => bot.movement.Hook(false), 500);
                                   }
                               }
                           }
                       }
                   } catch (e) {
-                      // Игнорируем сетевые ошибки, чтобы не спамить в логи
+                      // Ошибки сети игнорируем
                   }
-                  
-                  // Ждем перед следующим опросом (как sleep 4)
                   await new Promise(r => setTimeout(r, 4000));
               }
           }
@@ -142,5 +138,4 @@ jobs:
           startBots();
           EOF
           
-          # Запускаем созданный скрипт
           node bots.js
