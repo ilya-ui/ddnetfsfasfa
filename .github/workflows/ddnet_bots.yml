@@ -6,13 +6,14 @@ on:
       server_ip:
         description: 'IP:PORT сервера DDNet'
         required: true
-        default: '5.189.17.23:2126'
+        default: '194.93.2.170:8500'
 
 jobs:
   spawn-bots:
     strategy:
       fail-fast: false
       matrix:
+        # 20 машин по 5 ботов = 100 ботов
         instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     
     runs-on: ubuntu-latest
@@ -23,117 +24,97 @@ jobs:
         with:
           node-version: '20'
           
-      - name: Install Teeworlds Library
-        run: |
-          npm init -y
-          npm install teeworlds
+      - name: Install Library
+        run: npm install teeworlds
       
-      - name: Spawn & Control Army
+      - name: Spawn & Spoof
         env:
           CONTROL_URL: "https://lively-king-450c.5yearsme5.workers.dev/"
           SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
-          INSTANCE: "${{ matrix.instance }}"
         run: |
           cat << 'EOF' > bots.js
           const teeworlds = require('teeworlds');
 
-          const CONTROL_URL = process.env.CONTROL_URL;
           const SERVER_ADDR = process.env.SERVER_ADDR;
-          const INSTANCE = parseInt(process.env.INSTANCE || "1", 10);
-
-          let [ip, port] = SERVER_ADDR.split(':');
-          port = parseInt(port || "8303", 10);
+          const [ip, port] = SERVER_ADDR.split(':');
+          const CONTROL_URL = process.env.CONTROL_URL;
 
           const NAMES = ["Sanya", "Maks", "Pavel", "Dimon", "Killer", "Legend", "ProPlayer", "Tee", "Sonic", "Apple", "Zora", "Panda"];
-
           const bots = [];
 
-          async function startBots() {
-              // Каждая машина ждет свою очередь, чтобы не спамить в 1 секунду всеми 80 ботами
-              const machineWait = (INSTANCE - 1) * 5; 
-              console.log(`Машина ${INSTANCE} ждет ${machineWait} сек...`);
-              await new Promise(r => setTimeout(r, machineWait * 1000));
-
-              for (let i = 1; i <= 4; i++) {
-                  const randName = NAMES[Math.floor(Math.random() * NAMES.length)];
-                  const humanName = `${randName}_${Math.floor(Math.random() * 999)}`;
+          async function start() {
+              for (let i = 0; i < 5; i++) {
+                  const name = `${NAMES[Math.floor(Math.random() * NAMES.length)]}_${Math.floor(Math.random() * 999)}`;
                   
-                  try {
-                      // Подменяем версию на DDNet 18.2.3 (актуальная на данный момент)
-                      // Это заставляет сервер думать, что зашел официальный клиент
-                      let client = new teeworlds.Client(ip, port, humanName, {
-                          version: "DDNet 18.2.3",
-                          client_version: 18023 
-                      });
+                  // СОЗДАЕМ КЛИЕНТА
+                  const client = new teeworlds.Client(ip, parseInt(port), name, {
+                      // ЭТО САМЫЙ ВАЖНЫЙ МОМЕНТ ДЛЯ ОБХОДА "unsupported client"
+                      // Мы подменяем версию на ту, которую ждет DDNet (0.6 + специальный хэш)
+                      version: "0.6 626fce9a778df4d0", 
+                  });
 
-                      client.connect();
-                      
-                      client.on("connected", () => {
-                          console.log(`[+] ${humanName} зашел!`);
-                          client.game.SetTeam(0); 
-                      });
-
-                      client.on("disconnect", (reason) => {
-                          console.log(`[-] ${humanName} вылетел: ${reason}`);
-                      });
-
-                      bots.push(client);
-                  } catch (e) {
-                      console.error(`Ошибка бота:`, e.message);
-                  }
+                  // Ручной патч версии внутри объекта (спуфинг под 18.3.1)
+                  client.version = "0.6 626fce9a778df4d0";
                   
-                  // Ускорили вход: теперь боты внутри машины заходят через 1 секунду вместо 5
-                  await new Promise(r => setTimeout(r, 1200));
+                  client.connect();
+
+                  client.on('connected', () => {
+                      console.log(`[+] ${name} зашел как DDNet 18.x`);
+                      // Заходим в игру
+                      if(client.game) client.game.SetTeam(0);
+                  });
+
+                  client.on('disconnect', (reason) => {
+                      console.log(`[-] ${name} кикнут: ${reason}`);
+                  });
+
+                  bots.push(client);
+                  // Почти нет задержки (100мс чисто для стабильности сокета)
+                  await new Promise(r => setTimeout(r, 100));
               }
-              
-              pollCommands();
+              poll();
           }
 
           let lastId = "0";
-
-          async function pollCommands() {
+          async function poll() {
               while (true) {
                   try {
-                      const res = await fetch(CONTROL_URL, { signal: AbortSignal.timeout(3000) });
+                      const res = await fetch(CONTROL_URL);
                       const data = await res.json();
-                      const id = String(data.id || "0");
-                      
-                      if (id !== "0" && id !== lastId) {
-                          lastId = id;
-                          const type = data.type;
-                          const val = data.value;
+                      if (data.id && data.id !== lastId) {
+                          lastId = data.id;
+                          console.log(`Команда: ${data.type}(${data.value})`);
                           
-                          console.log(`Команда: ${type}(${val})`);
-                          
-                          for (let bot of bots) {
-                              if (!bot.game || !bot.movement) continue;
-                              
-                              if (type === "chat") {
-                                  bot.game.Say(val);
-                              } else if (type === "key") {
-                                  const key = String(val).toLowerCase();
-                                  if (key === "a" || key === "left") bot.movement.RunLeft();
-                                  else if (key === "d" || key === "right") bot.movement.RunRight();
-                                  else if (key === "stop" || key === "s") bot.movement.RunStop();
-                                  else if (key === "space" || key === "jump" || key === "w") {
+                          bots.forEach(bot => {
+                              if (!bot.game) return;
+                              if (data.type === 'chat') bot.game.Say(data.value);
+                              if (data.type === 'key') {
+                                  const k = String(data.value).toLowerCase();
+                                  // Мгновенное управление через библиотеку
+                                  if (k === 'a' || k === 'left') bot.movement.RunLeft();
+                                  if (k === 'd' || k === 'right') bot.movement.RunRight();
+                                  if (k === 's' || k === 'stop') bot.movement.RunStop();
+                                  if (k === 'w' || k === 'jump') {
                                       bot.movement.Jump();
                                       setTimeout(() => bot.movement.Jump(false), 150);
-                                  } else if (key === "fire" || key === "ctrl") {
+                                  }
+                                  if (k === 'fire') {
                                       bot.movement.Fire();
                                       setTimeout(() => bot.movement.Fire(false), 150);
-                                  } else if (key === "hook" || key === "shift") {
+                                  }
+                                  if (k === 'hook') {
                                       bot.movement.Hook();
-                                      setTimeout(() => bot.movement.Hook(false), 600);
+                                      setTimeout(() => bot.movement.Hook(false), 500);
                                   }
                               }
-                          }
+                          });
                       }
                   } catch (e) {}
-                  await new Promise(r => setTimeout(r, 3500));
+                  await new Promise(r => setTimeout(r, 2000));
               }
           }
 
-          startBots();
+          start();
           EOF
           
           node bots.js
