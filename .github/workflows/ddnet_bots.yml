@@ -1,84 +1,88 @@
-name: DDNet Bot Army Simple
+name: DDNet Bot Army Official Control
 
 on: 
   workflow_dispatch:
-    inputs:
-      server_ip:
-        description: 'IP:PORT сервера DDNet'
-        required: true
-        default: '194.93.2.170:8500'
 
 jobs:
   spawn-bots:
     strategy:
       fail-fast: false
       matrix:
-        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        # 30 машин по 4 бота = 120 ботов
+        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
     
     runs-on: ubuntu-latest
     
     steps:
-      - name: Install Base Deps
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xdotool libsdl2-2.0-0 libcurl4 jq
+          sudo apt-get install -y xvfb xdotool jq libsdl2-2.0-0 libcurl4 libfreetype6 libgl1 libglx-mesa0 libglu1-mesa libnotify4 libpng16-16 libvorbisfile3
       
-      - name: Download DDNet Binary Only (Super Fast)
+      - name: Download DDNet Client
         run: |
-          # Качаем архив и вытаскиваем ТОЛЬКО файл DDNet (он весит мало)
-          curl -L -o ddnet.tar.xz https://ddnet.org/downloads/DDNet-18.3.1-linux_x86_64.tar.xz
-          tar -xvf ddnet.tar.xz --wildcards '*/DDNet' --strip-components=1
-          chmod +x DDNet
+          LINK=$(curl -s https://ddnet.org/downloads/ | grep -o 'href="[^"]*linux_x86_64\.tar\.xz"' | head -n 1 | cut -d'"' -f2)
+          curl -L -o ddnet.tar.xz "https://ddnet.org/downloads/$LINK"
+          tar -xf ddnet.tar.xz
+          mv DDNet-* ddnet_folder
 
-      - name: Spawn Army (Instantly)
+      - name: Spawn & Control Army
         env:
-          CONTROL_URL: "https://lively-king-450c.5yearsme5.workers.dev/"
-          SERVER_ADDR: "${{ github.event.inputs.server_ip }}"
+          CONTROL_URL: "https://me5years.alwaysdata.net/index.php?action=get"
+          SERVER_ADDR: "5.189.17.23:2126"
         run: |
-          # Запуск "невидимого" экрана
-          export DISPLAY=:99
-          Xvfb :99 -screen 0 100x100x8 +extension GLX +render -noreset &
-          export LIBGL_ALWAYS_SOFTWARE=1
+          cd ddnet_folder
           
-          # Названия
-          NAMES=("Sanya" "Maks" "Pavel" "Dimon" "Killer" "Legend" "ProPlayer" "Tee" "Sonic" "Apple")
+          # Запуск виртуального экрана
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 3
 
-          # Запуск 5 ботов мгновенно
-          for i in {1..5}; do
-            NAME="${NAMES[$RANDOM % ${#NAMES[@]}]}_$((RANDOM % 999))"
-            
-            # Создаем конфиг (авто-вход включен)
-            echo "player_name \"$NAME\"; cl_auto_join_team 1; connect \"$SERVER_ADDR\"" > "b$i.cfg"
-            
-            # Запускаем бинарник с конфигом
-            ./DDNet -f "b$i.cfg" > /dev/null 2>&1 &
-            echo "[+] Бот $NAME запущен"
+          # Запуск 4 ботов (лимит IP на многих серверах)
+          SKINS=("default" "bluekitty" "cammostripes" "redbopp" "bluestripe")
+          for i in {1..4}; do
+            RAND_SKIN=${SKINS[$RANDOM % ${#SKINS[@]}]}
+            cat << EOF > "bot$i.cfg"
+          cl_show_welcome 0
+          cl_motd_time 0
+          cl_auto_join_team 1
+          player_name "Bot_${{ matrix.instance }}_$i"
+          player_skin "$RAND_SKIN"
+          EOF
+            # Запуск официального клиента в фоне
+            ./DDNet -f "bot$i.cfg" "connect $SERVER_ADDR" > /dev/null 2>&1 &
+            sleep 2
           done
 
-          echo "Все боты в сети. Слушаю команды..."
+          echo "Армия заспавнена. Слушаю команды..."
           
           LAST_ID="0"
           while true; do
-            # Опрос команд (раз в 2 секунды для скорости)
-            CMD_JSON=$(curl -s --max-time 2 "$CONTROL_URL" || echo '{"id":"0"}')
-            ID=$(echo "$CMD_JSON" | jq -r '.id // "0"')
+            # Получаем команду из Alwaysdata
+            CMD_JSON=$(curl -s "$CONTROL_URL" || echo '{"id":"0"}')
+            ID=$(echo "$CMD_JSON" | jq -r '.id // 0')
             
+            # Если ID команды изменился - выполняем
             if [ "$ID" != "$LAST_ID" ] && [ "$ID" != "0" ]; then
               LAST_ID=$ID
               TYPE=$(echo "$CMD_JSON" | jq -r '.type')
               VAL=$(echo "$CMD_JSON" | jq -r '.value')
               
-              echo "Команда: $TYPE($VAL)"
+              echo "Команда принята: $TYPE -> $VAL"
               
               # Ищем все окна DDNet
               WIDS=$(xdotool search --class "DDNet")
+              
               for WID in $WIDS; do
                 if [ "$TYPE" == "chat" ]; then
+                  # Чат через эмуляцию клавиш
                   xdotool key --window $WID t
-                  sleep 0.05
+                  sleep 0.1
                   xdotool type --window $WID "$VAL"
+                  sleep 0.1
                   xdotool key --window $WID Return
                 elif [ "$TYPE" == "key" ]; then
+                  # Любая клавиша (space, a, d, s)
                   xdotool key --window $WID "$VAL"
                 fi
               done
